@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentVisor Setup</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0a0a0f;
+      color: #fff;
+      font-family: -apple-system, 'SF Pro Display', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .container { width: 100%; max-width: 420px; }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: #00d4ff;
+      margin-bottom: 6px;
+    }
+
+    .sub { font-size: 14px; color: rgba(255,255,255,.5); margin-bottom: 32px; }
+
+    .card {
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,.45);
+      margin-bottom: 8px;
+    }
+
+    input {
+      width: 100%;
+      padding: 13px 16px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.05);
+      color: #fff;
+      font-size: 15px;
+      outline: none;
+      margin-bottom: 16px;
+      transition: border-color 150ms;
+    }
+    input:focus { border-color: #00d4ff; }
+
+    button {
+      width: 100%;
+      padding: 15px;
+      border-radius: 10px;
+      border: none;
+      background: #00d4ff;
+      color: #000;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 150ms;
+    }
+    button:hover { opacity: .85; }
+    button:disabled { opacity: .4; cursor: default; }
+
+    .error { font-size: 13px; color: #ff5252; margin-top: -8px; margin-bottom: 16px; }
+
+    /* Token display */
+    .token-display {
+      text-align: center;
+      padding: 32px 0;
+    }
+    .token-code {
+      font-size: 52px;
+      font-weight: 700;
+      letter-spacing: 12px;
+      color: #00d4ff;
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 12px;
+    }
+    .token-hint { font-size: 13px; color: rgba(255,255,255,.45); }
+    .token-ttl  { font-size: 13px; color: #ffb300; margin-top: 8px; }
+
+    .btn-secondary {
+      background: rgba(255,255,255,.08);
+      color: #fff;
+      margin-top: 12px;
+    }
+
+    #section-token { display: none; }
+    #section-login { display: block; }
+  </style>
+</head>
+<body>
+<script src="config.js"></script>
+<div class="container">
+  <h1>AgentVisor</h1>
+  <p class="sub">Set up your Meta Ray-Ban Display glasses</p>
+
+  <!-- Login -->
+  <div id="section-login" class="card">
+    <h2 style="font-size:18px;margin-bottom:20px;">Sign in</h2>
+    <label>Email</label>
+    <input type="email" id="email" placeholder="you@example.com" autocomplete="email">
+    <label>Password</label>
+    <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
+    <div id="login-error" class="error"></div>
+    <button id="btn-login">Continue</button>
+
+    <p style="margin-top:16px;font-size:13px;color:rgba(255,255,255,.35);text-align:center">
+      First time? A new account is created automatically.
+    </p>
+  </div>
+
+  <!-- Token -->
+  <div id="section-token" class="card">
+    <h2 style="font-size:18px;margin-bottom:20px;">Enter on your glasses</h2>
+    <div class="token-display">
+      <div class="token-code" id="token-code">------</div>
+      <div class="token-hint">Use Up/Down arrows to set each digit</div>
+      <div class="token-ttl" id="token-ttl">Expires in 5:00</div>
+    </div>
+    <button id="btn-new-token" class="btn-secondary">Generate new code</button>
+    <button id="btn-logout" class="btn-secondary" style="margin-top:8px">Sign out</button>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL   = window.GLASSDESK_CONFIG?.supabaseUrl  || '';
+const SUPABASE_ANON  = window.GLASSDESK_CONFIG?.supabaseAnon || '';
+const FUNCTIONS_BASE = SUPABASE_URL + '/functions/v1';
+
+let accessToken = localStorage.getItem('gd_setup_token');
+let tokenExpiry = null;
+let countdown = null;
+
+// ── Auth ────────────────────────────────────────────────────────
+async function signIn() {
+  const email    = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const errEl    = document.getElementById('login-error');
+  errEl.textContent = '';
+
+  if (!email || !password) { errEl.textContent = 'Email and password required'; return; }
+
+  document.getElementById('btn-login').disabled = true;
+
+  // Try sign-in first, then sign-up if not found
+  let res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON },
+    body: JSON.stringify({ email, password }),
+  });
+  let data = await res.json();
+
+  if (!res.ok && data.error_code === 'invalid_credentials') {
+    // Auto-register
+    res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON },
+      body: JSON.stringify({ email, password }),
+    });
+    data = await res.json();
+    if (!res.ok) {
+      errEl.textContent = data.msg || data.error_description || 'Sign up failed';
+      document.getElementById('btn-login').disabled = false;
+      return;
+    }
+    // New accounts need to sign in after creation
+    const r2 = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON },
+      body: JSON.stringify({ email, password }),
+    });
+    data = await r2.json();
+    if (!r2.ok) {
+      errEl.textContent = data.error_description || 'Login failed after signup';
+      document.getElementById('btn-login').disabled = false;
+      return;
+    }
+  } else if (!res.ok) {
+    errEl.textContent = data.error_description || 'Login failed';
+    document.getElementById('btn-login').disabled = false;
+    return;
+  }
+
+  accessToken = data.access_token;
+  localStorage.setItem('gd_setup_token', accessToken);
+  showTokenSection();
+  await generateToken();
+}
+
+function signOut() {
+  localStorage.removeItem('gd_setup_token');
+  accessToken = null;
+  clearInterval(countdown);
+  showLoginSection();
+}
+
+// ── Sections ────────────────────────────────────────────────────
+function showLoginSection() {
+  document.getElementById('section-login').style.display = 'block';
+  document.getElementById('section-token').style.display = 'none';
+}
+
+function showTokenSection() {
+  document.getElementById('section-login').style.display = 'none';
+  document.getElementById('section-token').style.display = 'block';
+}
+
+// ── Token generation ────────────────────────────────────────────
+async function generateToken() {
+  document.getElementById('token-code').textContent = '------';
+  clearInterval(countdown);
+
+  const res = await fetch(`${FUNCTIONS_BASE}/create_glasses_token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_ANON,
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) { signOut(); return; }
+    document.getElementById('token-ttl').textContent = 'Error generating code';
+    return;
+  }
+
+  const data = await res.json();
+  document.getElementById('token-code').textContent = data.code;
+  tokenExpiry = new Date(data.expires_at);
+  startCountdown();
+}
+
+function startCountdown() {
+  clearInterval(countdown);
+  countdown = setInterval(() => {
+    const secs = Math.max(0, Math.floor((tokenExpiry - Date.now()) / 1000));
+    const m = Math.floor(secs / 60);
+    const s = (secs % 60).toString().padStart(2, '0');
+    document.getElementById('token-ttl').textContent = `Expires in ${m}:${s}`;
+    if (secs === 0) {
+      clearInterval(countdown);
+      document.getElementById('token-code').textContent = '------';
+      document.getElementById('token-ttl').textContent = 'Code expired — generate a new one';
+    }
+  }, 1000);
+}
+
+// ── Event listeners ──────────────────────────────────────────────
+document.getElementById('btn-login').addEventListener('click', signIn);
+document.getElementById('btn-new-token').addEventListener('click', generateToken);
+document.getElementById('btn-logout').addEventListener('click', signOut);
+document.getElementById('password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') signIn();
+});
+
+// ── Boot ─────────────────────────────────────────────────────────
+if (accessToken) {
+  showTokenSection();
+  generateToken();
+}
+</script>
+</body>
+</html>

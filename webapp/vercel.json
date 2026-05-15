@@ -1,0 +1,12 @@
+{
+  "rewrites": [{ "source": "/(.*)", "destination": "/$1" }],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" },
+        { "key": "X-Frame-Options", "value": "DENY" }
+      ]
+    }
+  ]
+}

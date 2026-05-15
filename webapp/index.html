@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no">
+  <title>AgentVisor</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --accent:      #00d4ff;
+      --accent-glow: rgba(0,212,255,0.35);
+      --green:       #00e676;
+      --yellow:      #ffb300;
+      --red:         #ff5252;
+      --surface:     rgba(255,255,255,0.07);
+      --surface-hi:  rgba(255,255,255,0.13);
+      --border:      rgba(255,255,255,0.09);
+      --text:        #ffffff;
+      --text-dim:    rgba(255,255,255,0.45);
+      --radius-card: 14px;
+      --radius-btn:  10px;
+    }
+
+    body {
+      width: 600px;
+      height: 600px;
+      overflow: hidden;
+      background: #000;
+      font-family: -apple-system, 'SF Pro Display', sans-serif;
+      color: var(--text);
+    }
+
+    /* ── Views ──────────────────────────────────────────── */
+    .view { display: none; width: 600px; height: 600px; padding: 28px 24px; }
+    .view.active { display: flex; flex-direction: column; }
+
+    /* ── Page header ────────────────────────────────────── */
+    .page-header { margin-bottom: 20px; }
+    .page-title { font-size: 22px; font-weight: 700; color: var(--accent); }
+    .page-sub   { font-size: 13px; color: var(--text-dim); margin-top: 3px; }
+
+    /* ── Card ───────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: 18px;
+    }
+
+    /* ── Focusable / button ─────────────────────────────── */
+    .focusable {
+      border: 2px solid transparent;
+      border-radius: var(--radius-btn);
+      cursor: pointer;
+      transition: all 120ms ease;
+      outline: none;
+    }
+    .focusable:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+      background: var(--surface-hi);
+    }
+
+    /* ── Status dot ─────────────────────────────────────── */
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--text-dim);
+    }
+    .dot.online   { background: var(--green);  box-shadow: 0 0 7px var(--green); }
+    .dot.busy     { background: var(--yellow); box-shadow: 0 0 7px var(--yellow); }
+    .dot.waiting  { background: var(--accent); box-shadow: 0 0 7px var(--accent); animation: pulse 1.2s infinite; }
+    .dot.offline  { background: var(--text-dim); }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    /* ══════════════════════════════════════════════════════
+       VIEW: setup — digit picker for glasses token
+    ══════════════════════════════════════════════════════ */
+    #view-setup { justify-content: center; align-items: center; text-align: center; }
+    #view-setup .setup-card { width: 100%; max-width: 480px; }
+    #view-setup h2 { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
+    #view-setup p  { font-size: 13px; color: var(--text-dim); margin-bottom: 24px; line-height: 1.5; }
+
+    .digits {
+      display: flex; gap: 10px; justify-content: center;
+      margin-bottom: 24px;
+    }
+    .digit-cell {
+      width: 58px; height: 72px;
+      border-radius: 10px;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px; font-weight: 700;
+      transition: all 120ms;
+    }
+    .digit-cell.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .setup-hint { font-size: 12px; color: var(--text-dim); }
+    .setup-hint span { color: var(--accent); }
+
+    #setup-error {
+      margin-top: 14px;
+      font-size: 13px;
+      color: var(--red);
+      min-height: 18px;
+    }
+
+    /* ══════════════════════════════════════════════════════
+       VIEW: agents — list of paired agents
+    ══════════════════════════════════════════════════════ */
+    #agents-list { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 8px; }
+
+    .agent-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: var(--radius-card);
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+    .agent-row .agent-info { flex: 1; min-width: 0; }
+    .agent-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-status-text { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+    .agent-type-badge {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 5px;
+      background: var(--surface-hi);
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+
+    /* ══════════════════════════════════════════════════════
+       VIEW: detail — messages for a single agent
+    ══════════════════════════════════════════════════════ */
+    #view-detail { gap: 12px; }
+
+    #detail-header {
+      display: flex; align-items: center; gap: 10px;
+    }
+    #btn-back {
+      width: 36px; height: 36px;
+      border-radius: 9px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    #detail-agent-name { font-size: 17px; font-weight: 700; }
+    #detail-agent-status { font-size: 12px; color: var(--text-dim); }
+
+    #messages-container {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #messages-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    #messages-list::-webkit-scrollbar { display: none; }
+
+    .msg {
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+      max-width: 90%;
+    }
+    .msg.agent {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      align-self: flex-start;
+      color: var(--text);
+    }
+    .msg.user {
+      background: rgba(0,212,255,0.12);
+      border: 1px solid rgba(0,212,255,0.2);
+      align-self: flex-end;
+      color: var(--text);
+    }
+    .msg.tool {
+      background: rgba(255,179,0,0.08);
+      border: 1px solid rgba(255,179,0,0.2);
+      align-self: flex-start;
+      color: var(--yellow);
+      font-size: 12px;
+    }
+
+    /* ══════════════════════════════════════════════════════
+       VIEW: permission — approval overlay
+    ══════════════════════════════════════════════════════ */
+    #view-permission {
+      justify-content: center;
+      align-items: center;
+      background: rgba(0,0,0,0.92);
+    }
+
+    .permission-card {
+      width: 100%;
+      max-width: 500px;
+      border-radius: 18px;
+      border: 1px solid rgba(0,212,255,0.3);
+      background: rgba(0,30,45,0.95);
+      padding: 28px;
+      box-shadow: 0 0 40px rgba(0,212,255,0.15);
+    }
+
+    .permission-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+
+    .permission-agent { font-size: 14px; color: var(--text-dim); margin-bottom: 16px; }
+
+    .permission-tool {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--yellow);
+      background: rgba(255,179,0,0.1);
+      border: 1px solid rgba(255,179,0,0.25);
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin-bottom: 10px;
+      word-break: break-all;
+    }
+
+    .permission-detail {
+      font-size: 12px;
+      color: var(--text-dim);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin-bottom: 20px;
+      max-height: 80px;
+      overflow: hidden;
+      word-break: break-all;
+      line-height: 1.5;
+    }
+
+    .permission-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .btn-approve, .btn-deny {
+      flex: 1;
+      padding: 14px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 700;
+      text-align: center;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: all 120ms;
+    }
+    .btn-approve {
+      background: rgba(0,230,118,0.12);
+      border-color: rgba(0,230,118,0.3);
+      color: var(--green);
+    }
+    .btn-approve:focus {
+      border-color: var(--green);
+      box-shadow: 0 0 0 3px rgba(0,230,118,0.3);
+      background: rgba(0,230,118,0.2);
+    }
+    .btn-deny {
+      background: rgba(255,82,82,0.1);
+      border-color: rgba(255,82,82,0.25);
+      color: var(--red);
+    }
+    .btn-deny:focus {
+      border-color: var(--red);
+      box-shadow: 0 0 0 3px rgba(255,82,82,0.25);
+      background: rgba(255,82,82,0.2);
+    }
+
+    /* ══════════════════════════════════════════════════════
+       VIEW: loading
+    ══════════════════════════════════════════════════════ */
+    #view-loading {
+      justify-content: center;
+      align-items: center;
+      gap: 14px;
+    }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading-text { font-size: 14px; color: var(--text-dim); }
+  </style>
+</head>
+<body>
+<script src="config.js"></script>
+
+<!-- ── Loading ──────────────────────────────────────────────── -->
+<div id="view-loading" class="view active">
+  <div class="spinner"></div>
+  <div id="loading-text">Starting AgentVisor…</div>
+</div>
+
+<!-- ── Setup: enter 6-digit glasses token ───────────────────── -->
+<div id="view-setup" class="view">
+  <div class="setup-card card">
+    <h2>AgentVisor Setup</h2>
+    <p>Open the AgentVisor setup page on your phone or desktop and enter the 6-digit code shown here.</p>
+
+    <div class="digits" id="digit-display">
+      <div class="digit-cell active" id="dc-0">0</div>
+      <div class="digit-cell"        id="dc-1">0</div>
+      <div class="digit-cell"        id="dc-2">0</div>
+      <div class="digit-cell"        id="dc-3">0</div>
+      <div class="digit-cell"        id="dc-4">0</div>
+      <div class="digit-cell"        id="dc-5">0</div>
+    </div>
+
+    <div class="setup-hint">
+      <span>Up/Down</span> change digit &nbsp;·&nbsp; <span>Left/Right</span> move &nbsp;·&nbsp; <span>Enter</span> confirm
+    </div>
+    <div id="setup-error"></div>
+  </div>
+</div>
+
+<!-- ── Agents list ───────────────────────────────────────────── -->
+<div id="view-agents" class="view">
+  <div class="page-header">
+    <div class="page-title">AgentVisor</div>
+    <div class="page-sub" id="agents-sub">Loading agents…</div>
+  </div>
+  <div id="agents-list"></div>
+</div>
+
+<!-- ── Agent detail ──────────────────────────────────────────── -->
+<div id="view-detail" class="view">
+  <div id="detail-header">
+    <div class="focusable btn-icon" id="btn-back" tabindex="0">&#8592;</div>
+    <div>
+      <div id="detail-agent-name">Agent</div>
+      <div id="detail-agent-status">Idle</div>
+    </div>
+    <div style="margin-left:auto">
+      <div class="dot" id="detail-dot"></div>
+    </div>
+  </div>
+  <div id="messages-container">
+    <div id="messages-list"></div>
+  </div>
+</div>
+
+<!-- ── Permission request ────────────────────────────────────── -->
+<div id="view-permission" class="view">
+  <div class="permission-card">
+    <div class="permission-label">Permission Request</div>
+    <div class="permission-agent" id="perm-agent-name">Agent</div>
+    <div class="permission-tool"  id="perm-tool-name">tool_name</div>
+    <div class="permission-detail" id="perm-detail"></div>
+    <div class="permission-actions">
+      <div class="btn-approve focusable" id="btn-approve" tabindex="0">Allow (Enter)</div>
+      <div class="btn-deny    focusable" id="btn-deny"    tabindex="0">Deny (Esc)</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Config — read from config.js (loaded before this script) ──
+const SUPABASE_URL   = window.GLASSDESK_CONFIG?.supabaseUrl  || '';
+const SUPABASE_ANON  = window.GLASSDESK_CONFIG?.supabaseAnon || '';
+const FUNCTIONS_BASE = SUPABASE_URL + '/functions/v1';
+
+// ── State ──────────────────────────────────────────────────────
+let supabase = null;
+let currentView = 'loading';
+let agents = [];
+let activeAgentId = null;
+let messages = [];
+let pendingPermission = null;
+let realtimeChannels = {};
+
+// Setup digit picker state
+const DIGITS = [0,0,0,0,0,0];
+let digitPos = 0;
+
+// ── View router ────────────────────────────────────────────────
+function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  currentView = name;
+  requestAnimationFrame(() => restoreFocus(name));
+}
+
+function restoreFocus(view) {
+  if (view === 'agents') {
+    const first = document.querySelector('#agents-list .focusable');
+    if (first) first.focus();
+  } else if (view === 'detail') {
+    document.getElementById('btn-back')?.focus();
+  } else if (view === 'permission') {
+    document.getElementById('btn-approve')?.focus();
+  }
+}
+
+// ── Boot ───────────────────────────────────────────────────────
+async function boot() {
+  if (!SUPABASE_URL || !SUPABASE_ANON) {
+    setLoading('Configuration missing — fill in config.js and redeploy.');
+    showView('loading');
+    return;
+  }
+
+  const session = loadSession();
+  if (!session) {
+    showView('setup');
+    return;
+  }
+
+  setLoading('Connecting…');
+  showView('loading');
+
+  try {
+    // Try refreshing the token if it's expired or close to expiry
+    const expiresAt = session.expires_at * 1000;
+    if (Date.now() > expiresAt - 60_000) {
+      const refreshed = await refreshSession(session.refresh_token);
+      if (!refreshed) { clearSession(); showView('setup'); return; }
+    }
+
+    supabase = { _accessToken: session.access_token };
+    await loadAgents();
+  } catch (e) {
+    clearSession();
+    showView('setup');
+  }
+}
+
+async function refreshSession(refreshToken) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const newSession = { access_token: data.access_token, refresh_token: data.refresh_token, expires_at: data.expires_at };
+    saveSession(newSession);
+    supabase = { _accessToken: newSession.access_token };
+    return newSession;
+  } catch { return null; }
+}
+
+// ── Supabase helpers ───────────────────────────────────────────
+async function authedFetch(path, opts = {}) {
+  return fetch(`${SUPABASE_URL}${path}`, {
+    ...opts,
+    headers: {
+      'apikey': SUPABASE_ANON,
+      'Authorization': `Bearer ${supabase._accessToken}`,
+      'Content-Type': 'application/json',
+      ...(opts.headers || {}),
+    },
+  });
+}
+
+async function loadAgentsFromApi() {
+  const res = await authedFetch('/rest/v1/bridge_agents?select=*&order=created_at.asc');
+  if (!res.ok) throw new Error('Failed to load agents');
+  return res.json();
+}
+
+// ── Session storage (tokens only — no raw credentials) ────────
+function loadSession() {
+  try {
+    const raw = localStorage.getItem('gd_session');
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function saveSession(session) {
+  localStorage.setItem('gd_session', JSON.stringify(session));
+}
+
+function clearSession() {
+  localStorage.removeItem('gd_session');
+  supabase = null;
+}
+
+// ── Setup: redeem glasses token ────────────────────────────────
+async function redeemCode(code) {
+  setSetupError('');
+  setLoading('Verifying code…');
+  showView('loading');
+
+  try {
+    const res = await fetch(`${FUNCTIONS_BASE}/redeem_glasses_token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showView('setup');
+      setSetupError(data.error || 'Invalid code');
+      return;
+    }
+
+    saveSession(data.session);
+    await boot();
+  } catch (e) {
+    showView('setup');
+    setSetupError('Connection error');
+  }
+}
+
+function setSetupError(msg) {
+  document.getElementById('setup-error').textContent = msg;
+}
+
+function setLoading(msg) {
+  document.getElementById('loading-text').textContent = msg;
+}
+
+// ── Agent loading ──────────────────────────────────────────────
+async function loadAgents() {
+  try {
+    agents = await loadAgentsFromApi();
+    renderAgents();
+    subscribeAllAgents();
+    showView('agents');
+  } catch (e) {
+    setLoading('Failed to load agents. Press Enter to retry.');
+    showView('loading');
+  }
+}
+
+function renderAgents() {
+  const list = document.getElementById('agents-list');
+  const sub  = document.getElementById('agents-sub');
+  sub.textContent = `${agents.length} agent${agents.length !== 1 ? 's' : ''} paired`;
+
+  if (agents.length === 0) {
+    list.innerHTML = '<div class="card" style="text-align:center;padding:32px;color:var(--text-dim)">No agents paired.<br>Run: npx agentvisor</div>';
+    return;
+  }
+
+  list.innerHTML = agents.map((a, i) => `
+    <div class="agent-row focusable" tabindex="0" data-agent-id="${a.id}" data-idx="${i}">
+      <div class="dot ${statusToDot(a.status)}" id="dot-${a.id}"></div>
+      <div class="agent-info">
+        <div class="agent-name">${escHtml(a.name || 'Unnamed Agent')}</div>
+        <div class="agent-status-text" id="status-${a.id}">${statusLabel(a.status)}</div>
+      </div>
+      <div class="agent-type-badge">${escHtml(a.agent_type)}</div>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('.agent-row').forEach(row => {
+    row.addEventListener('click', () => openAgent(row.dataset.agentId));
+  });
+}
+
+function updateAgentRow(agentId, status) {
+  const dot = document.getElementById('dot-' + agentId);
+  const label = document.getElementById('status-' + agentId);
+  if (dot) dot.className = 'dot ' + statusToDot(status);
+  if (label) label.textContent = statusLabel(status);
+}
+
+// ── Realtime subscriptions ─────────────────────────────────────
+function subscribeAllAgents() {
+  if (!supabase._accessToken) return;
+
+  agents.forEach(agent => {
+    if (realtimeChannels[agent.id]) return;
+    subscribeAgent(agent);
+  });
+}
+
+function subscribeAgent(agent) {
+  const wsUrl = SUPABASE_URL.replace('https://', 'wss://') + '/realtime/v1/websocket?apikey=' + SUPABASE_ANON + '&vsn=1.0.0';
+  const ws = new WebSocket(wsUrl);
+  const channelTopic = `realtime:bridge:${agent.id}:main`;
+  let heartbeatInterval;
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      topic: channelTopic,
+      event: 'phx_join',
+      payload: { config: { broadcast: { self: false } }, access_token: supabase._accessToken },
+      ref: '1',
+    }));
+    heartbeatInterval = setInterval(() => {
+      ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: 'hb' }));
+    }, 20000);
+  };
+
+  ws.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    if (msg.topic !== channelTopic) return;
+    const payload = msg.payload;
+    if (!payload?.type) return;
+    handleBroadcast(agent.id, payload);
+  };
+
+  ws.onclose = () => {
+    clearInterval(heartbeatInterval);
+    delete realtimeChannels[agent.id];
+    // Reconnect after 5s
+    setTimeout(() => subscribeAgent(agent), 5000);
+  };
+
+  realtimeChannels[agent.id] = ws;
+}
+
+function handleBroadcast(agentId, payload) {
+  const { type } = payload;
+
+  if (type === 'activity_state') {
+    const { state, tool, permission_payload } = payload;
+    // Update agent in list
+    const agent = agents.find(a => a.id === agentId);
+    if (agent) agent.status = state;
+    updateAgentRow(agentId, state);
+
+    if (state === 'awaiting_permission' && permission_payload) {
+      showPermissionRequest(agentId, tool, permission_payload);
+    } else if (currentView === 'permission' && activeAgentId === agentId) {
+      // Agent resolved its own permission, go back
+      showView('detail');
+    }
+
+    // Update detail view status line
+    if (currentView === 'detail' && activeAgentId === agentId) {
+      document.getElementById('detail-agent-status').textContent = statusLabel(state);
+      const dd = document.getElementById('detail-dot');
+      if (dd) dd.className = 'dot ' + statusToDot(state);
+    }
+  }
+
+  if (type === 'agent_message' && currentView === 'detail' && activeAgentId === agentId) {
+    appendMessage({ role: 'agent', content: payload.content });
+  }
+  if (type === 'user_message_ack' && currentView === 'detail' && activeAgentId === agentId) {
+    appendMessage({ role: 'user', content: payload.content });
+  }
+}
+
+// ── Agent detail ───────────────────────────────────────────────
+function openAgent(agentId) {
+  const agent = agents.find(a => a.id === agentId);
+  if (!agent) return;
+  activeAgentId = agentId;
+  messages = [];
+
+  document.getElementById('detail-agent-name').textContent = agent.name || 'Agent';
+  document.getElementById('detail-agent-status').textContent = statusLabel(agent.status);
+  const dd = document.getElementById('detail-dot');
+  if (dd) dd.className = 'dot ' + statusToDot(agent.status);
+
+  document.getElementById('messages-list').innerHTML =
+    '<div class="msg agent" style="color:var(--text-dim)">Listening for activity…</div>';
+
+  showView('detail');
+}
+
+function appendMessage(msg) {
+  const list = document.getElementById('messages-list');
+  const div = document.createElement('div');
+  div.className = 'msg ' + msg.role;
+  div.textContent = msg.content;
+  list.appendChild(div);
+  list.scrollTop = list.scrollHeight;
+}
+
+// ── Permission request ─────────────────────────────────────────
+function showPermissionRequest(agentId, tool, payload) {
+  const agent = agents.find(a => a.id === agentId);
+  activeAgentId = agentId;
+  pendingPermission = { agentId, tool, payload };
+
+  document.getElementById('perm-agent-name').textContent = agent?.name || 'Agent';
+  document.getElementById('perm-tool-name').textContent = tool || 'Unknown tool';
+  document.getElementById('perm-detail').textContent =
+    typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2).slice(0, 300);
+
+  showView('permission');
+}
+
+async function respondToPermission(approved) {
+  if (!pendingPermission) return;
+  const { agentId } = pendingPermission;
+  pendingPermission = null;
+
+  // Broadcast the response back via Realtime
+  if (supabase._accessToken) {
+    const wsUrl = SUPABASE_URL.replace('https://', 'wss://') + '/realtime/v1/websocket?apikey=' + SUPABASE_ANON + '&vsn=1.0.0';
+    const ws = new WebSocket(wsUrl);
+    const channelTopic = `realtime:bridge:${agentId}:main`;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        topic: channelTopic,
+        event: 'phx_join',
+        payload: { config: { broadcast: { self: false } }, access_token: supabase._accessToken },
+        ref: '1',
+      }));
+      setTimeout(() => {
+        ws.send(JSON.stringify({
+          topic: channelTopic,
+          event: 'broadcast',
+          payload: { type: 'permission_response', approved },
+          ref: '2',
+        }));
+        setTimeout(() => ws.close(), 500);
+      }, 300);
+    };
+  }
+
+  showView('detail');
+}
+
+// ── Keyboard navigation ────────────────────────────────────────
+const DPAD = { UP: 'ArrowUp', DOWN: 'ArrowDown', LEFT: 'ArrowLeft', RIGHT: 'ArrowRight', OK: 'Enter', BACK: 'Escape' };
+
+function getFocusables() {
+  return Array.from(document.querySelectorAll(`#view-${currentView} .focusable`));
+}
+
+function moveFocus(dir) {
+  const focusables = getFocusables();
+  if (!focusables.length) return;
+  const idx = focusables.indexOf(document.activeElement);
+  if (idx === -1) { focusables[0].focus(); return; }
+  const isBack = dir === 'up' || dir === 'left';
+  const next = isBack
+    ? (idx > 0 ? idx - 1 : focusables.length - 1)
+    : (idx < focusables.length - 1 ? idx + 1 : 0);
+  focusables[next].focus();
+}
+
+document.addEventListener('keydown', (e) => {
+  // ── Setup view: digit picker ─────────────────────────
+  if (currentView === 'setup') {
+    if (e.key === DPAD.UP) {
+      DIGITS[digitPos] = (DIGITS[digitPos] + 1) % 10;
+      updateDigitDisplay();
+    } else if (e.key === DPAD.DOWN) {
+      DIGITS[digitPos] = (DIGITS[digitPos] + 9) % 10;
+      updateDigitDisplay();
+    } else if (e.key === DPAD.RIGHT) {
+      digitPos = Math.min(5, digitPos + 1);
+      updateDigitDisplay();
+    } else if (e.key === DPAD.LEFT) {
+      digitPos = Math.max(0, digitPos - 1);
+      updateDigitDisplay();
+    } else if (e.key === DPAD.OK) {
+      redeemCode(DIGITS.join(''));
+    }
+    e.preventDefault();
+    return;
+  }
+
+  // ── Loading view: retry on Enter ─────────────────────
+  if (currentView === 'loading') {
+    if (e.key === DPAD.OK) boot();
+    e.preventDefault();
+    return;
+  }
+
+  // ── Permission view ───────────────────────────────────
+  if (currentView === 'permission') {
+    if (e.key === DPAD.OK)   respondToPermission(true);
+    if (e.key === DPAD.BACK) respondToPermission(false);
+    if (e.key === DPAD.LEFT || e.key === DPAD.RIGHT) moveFocus(e.key === DPAD.LEFT ? 'left' : 'right');
+    e.preventDefault();
+    return;
+  }
+
+  // ── Agents / detail: general nav ─────────────────────
+  if (e.key === DPAD.UP)   moveFocus('up');
+  if (e.key === DPAD.DOWN) moveFocus('down');
+  if (e.key === DPAD.OK) {
+    const el = document.activeElement;
+    if (el?.classList.contains('focusable')) el.click();
+  }
+  if (e.key === DPAD.BACK && currentView === 'detail') {
+    activeAgentId = null;
+    showView('agents');
+  }
+
+  e.preventDefault();
+});
+
+// ── Digit display ──────────────────────────────────────────────
+function updateDigitDisplay() {
+  for (let i = 0; i < 6; i++) {
+    const cell = document.getElementById('dc-' + i);
+    cell.textContent = DIGITS[i];
+    cell.classList.toggle('active', i === digitPos);
+  }
+}
+
+// ── Utility ────────────────────────────────────────────────────
+function statusToDot(s) {
+  if (!s || s === 'offline') return 'offline';
+  if (s === 'idle' || s === 'online') return 'online';
+  if (s === 'awaiting_permission') return 'waiting';
+  return 'busy';
+}
+
+function statusLabel(s) {
+  const map = {
+    offline: 'Offline',
+    online: 'Online',
+    idle: 'Idle',
+    thinking: 'Thinking…',
+    using_tool: 'Using tool',
+    responding: 'Responding…',
+    awaiting_permission: 'Waiting for approval',
+    stop_requested: 'Stopping…',
+  };
+  return map[s] || s || 'Unknown';
+}
+
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+
+// ── Permission buttons ─────────────────────────────────────────
+document.getElementById('btn-approve').addEventListener('click', () => respondToPermission(true));
+document.getElementById('btn-deny').addEventListener('click',    () => respondToPermission(false));
+document.getElementById('btn-back').addEventListener('click',    () => { activeAgentId = null; showView('agents'); });
+
+// ── Start ──────────────────────────────────────────────────────
+boot();
+</script>
+</body>
+</html>

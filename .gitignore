@@ -1,0 +1,8 @@
+node_modules/
+bridge/.env
+bridge/.bridge_agents.json
+bridge/.bridge_device.json
+bridge/.bridge-data/
+webapp/config.js
+*.log
+.DS_Store
