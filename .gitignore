@@ -4,5 +4,6 @@ bridge/.bridge_agents.json
 bridge/.bridge_device.json
 bridge/.bridge-data/
 webapp/config.js
+.env.local
 *.log
 .DS_Store

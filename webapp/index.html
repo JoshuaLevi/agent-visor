@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no">
   <title>AgentVisor</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -31,16 +33,13 @@
       color: var(--text);
     }
 
-    /* ── Views ──────────────────────────────────────────── */
     .view { display: none; width: 600px; height: 600px; padding: 28px 24px; }
     .view.active { display: flex; flex-direction: column; }
 
-    /* ── Page header ────────────────────────────────────── */
     .page-header { margin-bottom: 20px; }
     .page-title { font-size: 22px; font-weight: 700; color: var(--accent); }
     .page-sub   { font-size: 13px; color: var(--text-dim); margin-top: 3px; }
 
-    /* ── Card ───────────────────────────────────────────── */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -48,7 +47,6 @@
       padding: 18px;
     }
 
-    /* ── Focusable / button ─────────────────────────────── */
     .focusable {
       border: 2px solid transparent;
       border-radius: var(--radius-btn);
@@ -62,7 +60,6 @@
       background: var(--surface-hi);
     }
 
-    /* ── Status dot ─────────────────────────────────────── */
     .dot {
       width: 10px; height: 10px;
       border-radius: 50%;
@@ -75,51 +72,20 @@
     .dot.offline  { background: var(--text-dim); }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
-    /* ══════════════════════════════════════════════════════
-       VIEW: setup — digit picker for glasses token
-    ══════════════════════════════════════════════════════ */
-    #view-setup { justify-content: center; align-items: center; text-align: center; }
-    #view-setup .setup-card { width: 100%; max-width: 480px; }
-    #view-setup h2 { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
-    #view-setup p  { font-size: 13px; color: var(--text-dim); margin-bottom: 24px; line-height: 1.5; }
-
-    .digits {
-      display: flex; gap: 10px; justify-content: center;
-      margin-bottom: 24px;
-    }
-    .digit-cell {
-      width: 58px; height: 72px;
-      border-radius: 10px;
-      border: 2px solid var(--border);
+    .btn-icon {
+      width: 36px; height: 36px;
+      border-radius: 9px;
       background: var(--surface);
+      border: 1px solid var(--border);
       display: flex; align-items: center; justify-content: center;
-      font-size: 28px; font-weight: 700;
-      transition: all 120ms;
-    }
-    .digit-cell.active {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-glow);
+      font-size: 18px;
+      flex-shrink: 0;
     }
 
-    .setup-hint { font-size: 12px; color: var(--text-dim); }
-    .setup-hint span { color: var(--accent); }
-
-    #setup-error {
-      margin-top: 14px;
-      font-size: 13px;
-      color: var(--red);
-      min-height: 18px;
-    }
-
-    /* ══════════════════════════════════════════════════════
-       VIEW: agents — list of paired agents
-    ══════════════════════════════════════════════════════ */
+    /* ── VIEW: agents ── */
     #agents-list { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 8px; }
-
     .agent-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
+      display: flex; align-items: center; gap: 12px;
       padding: 14px 16px;
       border-radius: var(--radius-card);
       background: var(--surface);
@@ -129,187 +95,226 @@
     .agent-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .agent-status-text { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
     .agent-type-badge {
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: .06em;
-      text-transform: uppercase;
-      padding: 2px 7px;
-      border-radius: 5px;
-      background: var(--surface-hi);
-      color: var(--text-dim);
-      flex-shrink: 0;
+      font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+      padding: 2px 7px; border-radius: 5px;
+      background: var(--surface-hi); color: var(--text-dim); flex-shrink: 0;
     }
 
-    /* ══════════════════════════════════════════════════════
-       VIEW: detail — messages for a single agent
-    ══════════════════════════════════════════════════════ */
-    #view-detail { gap: 12px; }
-
-    #detail-header {
+    /* ── VIEW: conversations ── */
+    #view-conversations { gap: 0; }
+    #conv-header {
       display: flex; align-items: center; gap: 10px;
+      margin-bottom: 16px; flex-shrink: 0;
     }
-    #btn-back {
-      width: 36px; height: 36px;
-      border-radius: 9px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px;
-      flex-shrink: 0;
+    #conv-agent-name  { font-size: 17px; font-weight: 700; }
+    #conv-agent-sub   { font-size: 12px; color: var(--text-dim); margin-top: 1px; }
+    #conversations-list {
+      flex: 1; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 6px;
     }
+    #conversations-list::-webkit-scrollbar { display: none; }
+    .conv-row {
+      display: flex; flex-direction: column; gap: 3px;
+      padding: 12px 14px;
+      border-radius: var(--radius-card);
+      background: var(--surface); border: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .conv-title {
+      font-size: 14px; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .conv-meta { font-size: 11px; color: var(--text-dim); }
+
+    /* ── VIEW: detail ── */
+    #view-detail { gap: 8px; }
+    #detail-header { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
     #detail-agent-name { font-size: 17px; font-weight: 700; }
     #detail-agent-status { font-size: 12px; color: var(--text-dim); }
-
     #messages-container {
-      flex: 1;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
+      flex: 1; overflow: hidden;
+      display: flex; flex-direction: column; gap: 8px;
     }
     #messages-list {
-      flex: 1;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
+      flex: 1; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 6px;
     }
     #messages-list::-webkit-scrollbar { display: none; }
 
+    /* ── Input area ── */
+    #input-area {
+      flex-shrink: 0; display: flex; flex-direction: column; gap: 6px;
+      padding-top: 4px; border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    #preset-bar {
+      display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px;
+    }
+    #preset-bar::-webkit-scrollbar { display: none; }
+    .preset-btn {
+      flex-shrink: 0; padding: 7px 13px; border-radius: 20px;
+      font-size: 12px; font-weight: 500;
+      background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.14);
+      color: var(--text); cursor: pointer; white-space: nowrap; outline: none;
+    }
+    .preset-btn:focus, .preset-btn:hover {
+      border-color: var(--accent); background: rgba(0,212,255,0.12);
+      color: var(--accent);
+    }
+    #desktop-input-row {
+      display: none; gap: 8px; align-items: flex-end;
+    }
+    #desktop-msg-input {
+      flex: 1; padding: 9px 13px; border-radius: 10px;
+      background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.14);
+      color: #fff; font-size: 13px; outline: none; font-family: inherit;
+      resize: none; min-height: 36px; max-height: 120px;
+      overflow-y: auto; line-height: 1.4;
+    }
+    #desktop-msg-input:focus { border-color: var(--accent); }
+    #btn-send-msg {
+      padding: 9px 14px; border-radius: 10px; border: none; cursor: pointer;
+      background: var(--accent); color: #000; font-size: 15px; font-weight: 700;
+      flex-shrink: 0; height: 36px;
+    }
+    #btn-send-msg:hover { opacity: 0.85; }
+    #btn-clear-input {
+      width: 28px; height: 28px; border-radius: 50%; border: none; cursor: pointer;
+      background: rgba(255,255,255,0.1); color: var(--text-dim);
+      font-size: 11px; flex-shrink: 0; transition: all 120ms ease;
+      align-self: center;
+    }
+    #btn-clear-input:hover { background: rgba(255,82,82,0.2); color: var(--red); }
+    #btn-voice {
+      width: 36px; height: 36px; border-radius: 10px; border: none; cursor: pointer;
+      background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.14);
+      color: #fff; font-size: 16px; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: all 120ms ease; outline: none;
+    }
+    #btn-voice:hover:not(:disabled) { background: rgba(255,255,255,0.13); }
+    #btn-voice:disabled { opacity: 0.3; cursor: not-allowed; }
+    #btn-voice.recording {
+      background: rgba(255,82,82,0.15);
+      border-color: var(--red);
+      color: var(--red);
+      animation: voice-pulse 1s ease-in-out infinite;
+    }
+    @keyframes voice-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,82,82,0.4); }
+      50%       { box-shadow: 0 0 0 6px rgba(255,82,82,0); }
+    }
     .msg {
-      padding: 10px 14px;
-      border-radius: 10px;
-      font-size: 13px;
-      line-height: 1.5;
-      max-width: 90%;
+      width: 100%; padding: 10px 12px 10px 14px;
+      border-radius: 8px; border-left: 2px solid transparent;
+      font-size: 13px; line-height: 1.6;
+      font-family: 'SF Pro Text', -apple-system, sans-serif;
+      position: relative;
+    }
+    .msg + .msg { margin-top: 2px; }
+    .msg::before {
+      display: block; font-size: 9px; font-weight: 700;
+      letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--text-dim); margin-bottom: 5px;
     }
     .msg.agent {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      align-self: flex-start;
-      color: var(--text);
+      background: rgba(255,255,255,0.04);
+      border-left-color: var(--accent); color: var(--text);
     }
+    .msg.agent::before { content: 'AGENT'; color: var(--accent); opacity: 0.7; }
     .msg.user {
-      background: rgba(0,212,255,0.12);
-      border: 1px solid rgba(0,212,255,0.2);
-      align-self: flex-end;
-      color: var(--text);
+      background: rgba(255,255,255,0.06);
+      border-left-color: rgba(255,255,255,0.25); color: var(--text);
     }
+    .msg.user::before { content: 'YOU'; }
     .msg.tool {
-      background: rgba(255,179,0,0.08);
-      border: 1px solid rgba(255,179,0,0.2);
-      align-self: flex-start;
-      color: var(--yellow);
-      font-size: 12px;
+      background: rgba(255,179,0,0.06);
+      border-left-color: var(--yellow); color: var(--text-dim); font-size: 12px;
     }
+    .msg.tool::before { content: 'TOOL'; color: var(--yellow); opacity: 0.8; }
 
-    /* ══════════════════════════════════════════════════════
-       VIEW: permission — approval overlay
-    ══════════════════════════════════════════════════════ */
+    /* ── Markdown content inside messages ── */
+    .msg strong, .msg b { font-weight: 700; color: #fff; }
+    .msg em { opacity: 0.85; font-style: italic; }
+    .msg h1, .msg h2, .msg h3 {
+      font-weight: 600; color: #fff; margin: 10px 0 4px;
+    }
+    .msg h1 { font-size: 16px; }
+    .msg h2 { font-size: 15px; }
+    .msg h3 { font-size: 14px; }
+    .msg hr {
+      border: none; border-top: 1px solid rgba(255,255,255,0.12);
+      margin: 8px 0;
+    }
+    .msg code {
+      font-family: 'SF Mono', 'Menlo', monospace;
+      font-size: 11px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 3px; padding: 1px 5px;
+      color: #a8d8ea;
+    }
+    .msg pre {
+      overflow-x: auto;
+      background: rgba(0,0,0,0.45);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px; padding: 10px;
+      margin: 6px 0; white-space: pre;
+    }
+    .msg pre code {
+      background: none; border: none;
+      padding: 0; font-size: 10px; color: #a8d8ea;
+    }
+    .msg a { color: var(--accent); text-decoration: underline; }
+    .msg ul, .msg ol { padding-left: 18px; margin: 4px 0; }
+    .msg ul { list-style: disc; }
+    .msg ol { list-style: decimal; }
+    .msg li { margin: 2px 0; }
+    .msg p { margin: 4px 0; }
+    .msg p:last-child { margin-bottom: 0; }
+
+    /* ── VIEW: permission ── */
     #view-permission {
-      justify-content: center;
-      align-items: center;
+      justify-content: center; align-items: center;
       background: rgba(0,0,0,0.92);
     }
-
     .permission-card {
-      width: 100%;
-      max-width: 500px;
-      border-radius: 18px;
-      border: 1px solid rgba(0,212,255,0.3);
-      background: rgba(0,30,45,0.95);
-      padding: 28px;
+      width: 100%; max-width: 500px;
+      border-radius: 18px; border: 1px solid rgba(0,212,255,0.3);
+      background: rgba(0,30,45,0.95); padding: 28px;
       box-shadow: 0 0 40px rgba(0,212,255,0.15);
     }
-
     .permission-label {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: .1em;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 10px;
+      font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: 10px;
     }
-
     .permission-agent { font-size: 14px; color: var(--text-dim); margin-bottom: 16px; }
-
     .permission-tool {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--yellow);
-      background: rgba(255,179,0,0.1);
-      border: 1px solid rgba(255,179,0,0.25);
-      border-radius: 8px;
-      padding: 8px 12px;
-      margin-bottom: 10px;
-      word-break: break-all;
+      font-size: 13px; font-weight: 600; color: var(--yellow);
+      background: rgba(255,179,0,0.1); border: 1px solid rgba(255,179,0,0.25);
+      border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; word-break: break-all;
     }
-
     .permission-detail {
-      font-size: 12px;
-      color: var(--text-dim);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 12px;
-      margin-bottom: 20px;
-      max-height: 80px;
-      overflow: hidden;
-      word-break: break-all;
-      line-height: 1.5;
+      font-size: 12px; color: var(--text-dim);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 12px; margin-bottom: 20px;
+      max-height: 80px; overflow: hidden; word-break: break-all; line-height: 1.5;
     }
-
-    .permission-actions {
-      display: flex;
-      gap: 10px;
-    }
-
+    .permission-actions { display: flex; gap: 10px; }
     .btn-approve, .btn-deny {
-      flex: 1;
-      padding: 14px;
-      border-radius: 10px;
-      font-size: 15px;
-      font-weight: 700;
-      text-align: center;
-      border: 2px solid transparent;
-      cursor: pointer;
-      transition: all 120ms;
+      flex: 1; padding: 14px; border-radius: 10px;
+      font-size: 15px; font-weight: 700; text-align: center;
+      border: 2px solid transparent; cursor: pointer; transition: all 120ms;
     }
-    .btn-approve {
-      background: rgba(0,230,118,0.12);
-      border-color: rgba(0,230,118,0.3);
-      color: var(--green);
-    }
-    .btn-approve:focus {
-      border-color: var(--green);
-      box-shadow: 0 0 0 3px rgba(0,230,118,0.3);
-      background: rgba(0,230,118,0.2);
-    }
-    .btn-deny {
-      background: rgba(255,82,82,0.1);
-      border-color: rgba(255,82,82,0.25);
-      color: var(--red);
-    }
-    .btn-deny:focus {
-      border-color: var(--red);
-      box-shadow: 0 0 0 3px rgba(255,82,82,0.25);
-      background: rgba(255,82,82,0.2);
-    }
+    .btn-approve { background: rgba(0,230,118,0.12); border-color: rgba(0,230,118,0.3); color: var(--green); }
+    .btn-approve:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(0,230,118,0.3); background: rgba(0,230,118,0.2); }
+    .btn-deny { background: rgba(255,82,82,0.1); border-color: rgba(255,82,82,0.25); color: var(--red); }
+    .btn-deny:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(255,82,82,0.25); background: rgba(255,82,82,0.2); }
 
-    /* ══════════════════════════════════════════════════════
-       VIEW: loading
-    ══════════════════════════════════════════════════════ */
-    #view-loading {
-      justify-content: center;
-      align-items: center;
-      gap: 14px;
-    }
+    /* ── VIEW: loading ── */
+    #view-loading { justify-content: center; align-items: center; gap: 14px; }
     .spinner {
       width: 32px; height: 32px;
-      border: 3px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin .8s linear infinite;
+      border: 3px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     #loading-text { font-size: 14px; color: var(--text-dim); }
@@ -318,35 +323,11 @@
 <body>
 <script src="config.js"></script>
 
-<!-- ── Loading ──────────────────────────────────────────────── -->
 <div id="view-loading" class="view active">
   <div class="spinner"></div>
   <div id="loading-text">Starting AgentVisor…</div>
 </div>
 
-<!-- ── Setup: enter 6-digit glasses token ───────────────────── -->
-<div id="view-setup" class="view">
-  <div class="setup-card card">
-    <h2>AgentVisor Setup</h2>
-    <p>Open the AgentVisor setup page on your phone or desktop and enter the 6-digit code shown here.</p>
-
-    <div class="digits" id="digit-display">
-      <div class="digit-cell active" id="dc-0">0</div>
-      <div class="digit-cell"        id="dc-1">0</div>
-      <div class="digit-cell"        id="dc-2">0</div>
-      <div class="digit-cell"        id="dc-3">0</div>
-      <div class="digit-cell"        id="dc-4">0</div>
-      <div class="digit-cell"        id="dc-5">0</div>
-    </div>
-
-    <div class="setup-hint">
-      <span>Up/Down</span> change digit &nbsp;·&nbsp; <span>Left/Right</span> move &nbsp;·&nbsp; <span>Enter</span> confirm
-    </div>
-    <div id="setup-error"></div>
-  </div>
-</div>
-
-<!-- ── Agents list ───────────────────────────────────────────── -->
 <div id="view-agents" class="view">
   <div class="page-header">
     <div class="page-title">AgentVisor</div>
@@ -355,7 +336,20 @@
   <div id="agents-list"></div>
 </div>
 
-<!-- ── Agent detail ──────────────────────────────────────────── -->
+<div id="view-conversations" class="view">
+  <div id="conv-header">
+    <div class="focusable btn-icon" id="btn-conv-back" tabindex="0">&#8592;</div>
+    <div>
+      <div id="conv-agent-name">Agent</div>
+      <div id="conv-agent-sub">Sessions</div>
+    </div>
+    <div style="margin-left:auto">
+      <div class="dot" id="conv-dot"></div>
+    </div>
+  </div>
+  <div id="conversations-list"></div>
+</div>
+
 <div id="view-detail" class="view">
   <div id="detail-header">
     <div class="focusable btn-icon" id="btn-back" tabindex="0">&#8592;</div>
@@ -370,9 +364,30 @@
   <div id="messages-container">
     <div id="messages-list"></div>
   </div>
+  <div id="input-area">
+    <div id="preset-bar">
+      <div class="preset-btn focusable" tabindex="0" data-msg="What are you currently working on? Give a one-sentence status update.">What are you doing?</div>
+      <div class="preset-btn focusable" tabindex="0" data-msg="List all files you have modified, created, or deleted so far in this session.">Show changed files</div>
+      <div class="preset-btn focusable" tabindex="0" data-msg="Summarize what you have accomplished so far and what still needs to be done.">Summarize progress</div>
+      <div class="preset-btn focusable" tabindex="0" data-msg="Stop what you are doing. Write out a step-by-step plan of what you intend to do next before taking any action.">Stop, make a plan</div>
+      <div class="preset-btn focusable" tabindex="0" data-msg="Revert the last change you made. If you used git, run git stash or undo the last edit and confirm what was reverted.">Undo last change</div>
+      <div class="preset-btn focusable" tabindex="0" data-msg="Are you stuck or blocked? If yes, explain what the problem is and what you need from me to continue.">Are you stuck?</div>
+    </div>
+    <div id="desktop-input-row">
+      <textarea id="desktop-msg-input" rows="1" placeholder="Type a message…" autocomplete="off"></textarea>
+      <button id="btn-clear-input" title="Clear" aria-label="Clear input" style="display:none">&#10005;</button>
+      <button id="btn-voice" title="Voice input" aria-label="Voice input">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="5" y="1" width="6" height="9" rx="3" fill="currentColor"/>
+          <path d="M2.5 8a5.5 5.5 0 0 0 11 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+          <line x1="8" y1="13.5" x2="8" y2="15.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button id="btn-send-msg">&#8593;</button>
+    </div>
+  </div>
 </div>
 
-<!-- ── Permission request ────────────────────────────────────── -->
 <div id="view-permission" class="view">
   <div class="permission-card">
     <div class="permission-label">Permission Request</div>
@@ -387,23 +402,22 @@
 </div>
 
 <script>
-// ── Config — read from config.js (loaded before this script) ──
-const SUPABASE_URL   = window.GLASSDESK_CONFIG?.supabaseUrl  || '';
-const SUPABASE_ANON  = window.GLASSDESK_CONFIG?.supabaseAnon || '';
-const FUNCTIONS_BASE = SUPABASE_URL + '/functions/v1';
+// Configure marked.js (v5+ API — no deprecated options)
+marked.use({ gfm: true, breaks: true });
 
-// ── State ──────────────────────────────────────────────────────
-let supabase = null;
-let currentView = 'loading';
-let agents = [];
-let activeAgentId = null;
-let messages = [];
-let pendingPermission = null;
-let realtimeChannels = {};
+const SUPABASE_URL  = window.GLASSDESK_CONFIG?.supabaseUrl  || '';
+const SUPABASE_ANON = window.GLASSDESK_CONFIG?.supabaseAnon || '';
 
-// Setup digit picker state
-const DIGITS = [0,0,0,0,0,0];
-let digitPos = 0;
+// ── State ─────────────────────────────────────────────────────
+let currentView         = 'loading';
+let supabaseClient      = null;
+let agents              = [];
+let activeAgentId       = null;
+let conversations       = [];
+let activeConversationId = null;
+let pendingPermission   = null;
+let realtimeChannels    = {};  // agentId → supabase RealtimeChannel
+let _convLoadTimer      = null;
 
 // ── View router ────────────────────────────────────────────────
 function showView(name) {
@@ -415,8 +429,10 @@ function showView(name) {
 
 function restoreFocus(view) {
   if (view === 'agents') {
-    const first = document.querySelector('#agents-list .focusable');
-    if (first) first.focus();
+    document.querySelector('#agents-list .focusable')?.focus();
+  } else if (view === 'conversations') {
+    const first = document.querySelector('#conversations-list .focusable');
+    if (first) first.focus(); else document.getElementById('btn-conv-back')?.focus();
   } else if (view === 'detail') {
     document.getElementById('btn-back')?.focus();
   } else if (view === 'permission') {
@@ -428,142 +444,46 @@ function restoreFocus(view) {
 async function boot() {
   if (!SUPABASE_URL || !SUPABASE_ANON) {
     setLoading('Configuration missing — fill in config.js and redeploy.');
-    showView('loading');
     return;
   }
-
-  const session = loadSession();
-  if (!session) {
-    showView('setup');
-    return;
-  }
-
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
   setLoading('Connecting…');
-  showView('loading');
-
-  try {
-    // Try refreshing the token if it's expired or close to expiry
-    const expiresAt = session.expires_at * 1000;
-    if (Date.now() > expiresAt - 60_000) {
-      const refreshed = await refreshSession(session.refresh_token);
-      if (!refreshed) { clearSession(); showView('setup'); return; }
-    }
-
-    supabase = { _accessToken: session.access_token };
-    await loadAgents();
-  } catch (e) {
-    clearSession();
-    showView('setup');
-  }
+  await loadAgents();
 }
 
-async function refreshSession(refreshToken) {
-  try {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const newSession = { access_token: data.access_token, refresh_token: data.refresh_token, expires_at: data.expires_at };
-    saveSession(newSession);
-    supabase = { _accessToken: newSession.access_token };
-    return newSession;
-  } catch { return null; }
-}
-
-// ── Supabase helpers ───────────────────────────────────────────
-async function authedFetch(path, opts = {}) {
+// ── Supabase REST ──────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
   return fetch(`${SUPABASE_URL}${path}`, {
     ...opts,
     headers: {
-      'apikey': SUPABASE_ANON,
-      'Authorization': `Bearer ${supabase._accessToken}`,
+      apikey: SUPABASE_ANON,
+      Authorization: `Bearer ${SUPABASE_ANON}`,
       'Content-Type': 'application/json',
       ...(opts.headers || {}),
     },
   });
 }
 
-async function loadAgentsFromApi() {
-  const res = await authedFetch('/rest/v1/bridge_agents?select=*&order=created_at.asc');
-  if (!res.ok) throw new Error('Failed to load agents');
-  return res.json();
-}
-
-// ── Session storage (tokens only — no raw credentials) ────────
-function loadSession() {
-  try {
-    const raw = localStorage.getItem('gd_session');
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-}
-
-function saveSession(session) {
-  localStorage.setItem('gd_session', JSON.stringify(session));
-}
-
-function clearSession() {
-  localStorage.removeItem('gd_session');
-  supabase = null;
-}
-
-// ── Setup: redeem glasses token ────────────────────────────────
-async function redeemCode(code) {
-  setSetupError('');
-  setLoading('Verifying code…');
-  showView('loading');
-
-  try {
-    const res = await fetch(`${FUNCTIONS_BASE}/redeem_glasses_token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON },
-      body: JSON.stringify({ code }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      showView('setup');
-      setSetupError(data.error || 'Invalid code');
-      return;
-    }
-
-    saveSession(data.session);
-    await boot();
-  } catch (e) {
-    showView('setup');
-    setSetupError('Connection error');
-  }
-}
-
-function setSetupError(msg) {
-  document.getElementById('setup-error').textContent = msg;
-}
-
-function setLoading(msg) {
-  document.getElementById('loading-text').textContent = msg;
-}
-
-// ── Agent loading ──────────────────────────────────────────────
 async function loadAgents() {
   try {
-    agents = await loadAgentsFromApi();
+    const res = await apiFetch('/rest/v1/bridge_agents?select=*&order=created_at.asc');
+    if (!res.ok) throw new Error('Failed to load agents');
+    agents = await res.json();
     renderAgents();
     subscribeAllAgents();
     showView('agents');
   } catch (e) {
-    setLoading('Failed to load agents. Press Enter to retry.');
-    showView('loading');
+    setLoading('Failed to connect. Press Enter to retry.');
   }
 }
 
 function renderAgents() {
   const list = document.getElementById('agents-list');
   const sub  = document.getElementById('agents-sub');
-  sub.textContent = `${agents.length} agent${agents.length !== 1 ? 's' : ''} paired`;
+  sub.textContent = `${agents.length} agent${agents.length !== 1 ? 's' : ''}`;
 
   if (agents.length === 0) {
-    list.innerHTML = '<div class="card" style="text-align:center;padding:32px;color:var(--text-dim)">No agents paired.<br>Run: npx agentvisor</div>';
+    list.innerHTML = '<div class="card" style="text-align:center;padding:32px;color:var(--text-dim)">No agents registered.<br>Run: node bridge/sync.js</div>';
     return;
   }
 
@@ -584,127 +504,248 @@ function renderAgents() {
 }
 
 function updateAgentRow(agentId, status) {
-  const dot = document.getElementById('dot-' + agentId);
+  const dot   = document.getElementById('dot-' + agentId);
   const label = document.getElementById('status-' + agentId);
-  if (dot) dot.className = 'dot ' + statusToDot(status);
+  if (dot)   dot.className = 'dot ' + statusToDot(status);
   if (label) label.textContent = statusLabel(status);
 }
 
-// ── Realtime subscriptions ─────────────────────────────────────
-function subscribeAllAgents() {
-  if (!supabase._accessToken) return;
+function setLoading(msg) {
+  document.getElementById('loading-text').textContent = msg;
+}
 
+// ── Realtime via supabase-js ───────────────────────────────────
+function subscribeAllAgents() {
   agents.forEach(agent => {
-    if (realtimeChannels[agent.id]) return;
-    subscribeAgent(agent);
+    if (!realtimeChannels[agent.id]) subscribeAgent(agent);
   });
 }
 
 function subscribeAgent(agent) {
-  const wsUrl = SUPABASE_URL.replace('https://', 'wss://') + '/realtime/v1/websocket?apikey=' + SUPABASE_ANON + '&vsn=1.0.0';
-  const ws = new WebSocket(wsUrl);
-  const channelTopic = `realtime:bridge:${agent.id}:main`;
-  let heartbeatInterval;
+  const ch = supabaseClient.channel(`bridge:${agent.id}`, {
+    config: { broadcast: { self: false } },
+  });
 
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
-      topic: channelTopic,
-      event: 'phx_join',
-      payload: { config: { broadcast: { self: false } }, access_token: supabase._accessToken },
-      ref: '1',
-    }));
-    heartbeatInterval = setInterval(() => {
-      ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: 'hb' }));
-    }, 20000);
-  };
+  // Register one handler per event — supabase-js calls the handler with
+  // { type, event, payload } where payload = the actual inner data.
+  const on = (event, handler) => ch.on('broadcast', { event }, ({ payload }) => handler(payload));
 
-  ws.onmessage = (evt) => {
-    let msg;
-    try { msg = JSON.parse(evt.data); } catch { return; }
-    if (msg.topic !== channelTopic) return;
-    const payload = msg.payload;
-    if (!payload?.type) return;
-    handleBroadcast(agent.id, payload);
-  };
-
-  ws.onclose = () => {
-    clearInterval(heartbeatInterval);
-    delete realtimeChannels[agent.id];
-    // Reconnect after 5s
-    setTimeout(() => subscribeAgent(agent), 5000);
-  };
-
-  realtimeChannels[agent.id] = ws;
-}
-
-function handleBroadcast(agentId, payload) {
-  const { type } = payload;
-
-  if (type === 'activity_state') {
-    const { state, tool, permission_payload } = payload;
-    // Update agent in list
-    const agent = agents.find(a => a.id === agentId);
-    if (agent) agent.status = state;
-    updateAgentRow(agentId, state);
+  on('activity_state', (data) => {
+    const { state, tool, permission_payload } = data;
+    const ag = agents.find(a => a.id === agent.id);
+    if (ag) ag.status = state;
+    updateAgentRow(agent.id, state);
 
     if (state === 'awaiting_permission' && permission_payload) {
-      showPermissionRequest(agentId, tool, permission_payload);
-    } else if (currentView === 'permission' && activeAgentId === agentId) {
-      // Agent resolved its own permission, go back
+      showPermissionRequest(agent.id, tool, permission_payload);
+    } else if (currentView === 'permission' && activeAgentId === agent.id) {
       showView('detail');
     }
-
-    // Update detail view status line
-    if (currentView === 'detail' && activeAgentId === agentId) {
+    if (currentView === 'detail' && activeAgentId === agent.id) {
       document.getElementById('detail-agent-status').textContent = statusLabel(state);
       const dd = document.getElementById('detail-dot');
       if (dd) dd.className = 'dot ' + statusToDot(state);
     }
-  }
+    if (currentView === 'conversations' && activeAgentId === agent.id) {
+      const cd = document.getElementById('conv-dot');
+      if (cd) cd.className = 'dot ' + statusToDot(state);
+    }
+  });
 
-  if (type === 'agent_message' && currentView === 'detail' && activeAgentId === agentId) {
-    appendMessage({ role: 'agent', content: payload.content });
-  }
-  if (type === 'user_message_ack' && currentView === 'detail' && activeAgentId === agentId) {
-    appendMessage({ role: 'user', content: payload.content });
-  }
+  on('agent_message', (data) => {
+    if (currentView === 'detail' && activeAgentId === agent.id
+        && (!activeConversationId || data.conversation_id === activeConversationId)) {
+      appendMessage({ role: 'agent', content: data.content });
+    }
+  });
+
+  on('user_message_ack', (data) => {
+    if (currentView === 'detail' && activeAgentId === agent.id
+        && (!activeConversationId || data.conversation_id === activeConversationId)) {
+      appendMessage({ role: 'user', content: data.content });
+    }
+  });
+
+  on('conversations_response', (data) => {
+    if (activeAgentId !== agent.id) return;
+    clearTimeout(_convLoadTimer);
+    conversations = data.conversations || [];
+    renderConversations();
+    if (currentView !== 'conversations') showView('conversations');
+  });
+
+  on('history_response', (data) => {
+    if (activeAgentId !== agent.id || data.conversation_id !== activeConversationId) return;
+    const list = document.getElementById('messages-list');
+    list.innerHTML = '';
+    const msgs = data.messages || [];
+    if (msgs.length === 0) {
+      list.innerHTML = '<div class="msg agent" style="color:var(--text-dim)">No messages yet — listening for activity…</div>';
+    } else {
+      msgs.forEach(m => appendMessage({ role: m.role === 'user' ? 'user' : 'agent', content: m.content }));
+    }
+    showView('detail');
+  });
+
+  on('conversation_created', (data) => {
+    if (data.agent_id !== agent.id) return;
+    if (!conversations.find(c => c.id === data.conversation_id)) {
+      conversations.unshift({
+        id: data.conversation_id,
+        title: data.title,
+        created_at: data.created_at,
+        workspace: data.workspace,
+        agent_id: agent.id,
+      });
+      if (currentView === 'conversations' && activeAgentId === agent.id) renderConversations();
+    }
+  });
+
+  on('bridge_presence', (_data) => {
+    // Bridge just reconnected — retry fetch_conversations if we're waiting.
+    if (activeAgentId === agent.id && currentView === 'conversations'
+        && document.getElementById('conv-agent-sub').textContent === 'Loading sessions…') {
+      requestConversations(agent.id);
+    }
+  });
+
+  ch.subscribe((status) => {
+    if (status === 'SUBSCRIBED') {
+      // Channel ready — if we were waiting for conversations, request them now.
+      if (activeAgentId === agent.id && currentView === 'conversations'
+          && document.getElementById('conv-agent-sub').textContent === 'Loading sessions…') {
+        requestConversations(agent.id);
+      }
+    }
+  });
+
+  realtimeChannels[agent.id] = ch;
 }
 
-// ── Agent detail ───────────────────────────────────────────────
+// ── Send broadcast to bridge ───────────────────────────────────
+function sendBroadcast(agentId, eventType, innerPayload = {}) {
+  const ch = realtimeChannels[agentId];
+  if (!ch) return false;
+  ch.send({ type: 'broadcast', event: eventType, payload: innerPayload });
+  return true;
+}
+
+// ── Conversations flow ─────────────────────────────────────────
+function requestConversations(agentId) {
+  clearTimeout(_convLoadTimer);
+  sendBroadcast(agentId, 'fetch_conversations', { request_id: String(Date.now()) });
+  // Retry after 4s in case bridge was reconnecting.
+  _convLoadTimer = setTimeout(() => {
+    if (activeAgentId === agentId && currentView === 'conversations'
+        && document.getElementById('conv-agent-sub').textContent === 'Loading sessions…') {
+      requestConversations(agentId);
+    }
+  }, 4000);
+}
+
 function openAgent(agentId) {
   const agent = agents.find(a => a.id === agentId);
   if (!agent) return;
   activeAgentId = agentId;
-  messages = [];
+  activeConversationId = null;
+  conversations = [];
 
-  document.getElementById('detail-agent-name').textContent = agent.name || 'Agent';
-  document.getElementById('detail-agent-status').textContent = statusLabel(agent.status);
+  document.getElementById('conv-agent-name').textContent = agent.name || 'Agent';
+  document.getElementById('conv-agent-sub').textContent = 'Loading sessions…';
+  const cd = document.getElementById('conv-dot');
+  if (cd) cd.className = 'dot ' + statusToDot(agent.status);
+
+  document.getElementById('conversations-list').innerHTML =
+    '<div class="card" style="text-align:center;padding:24px;color:var(--text-dim)">Loading sessions…</div>';
+
+  showView('conversations');
+  requestConversations(agentId);
+}
+
+function renderConversations() {
+  const list = document.getElementById('conversations-list');
+  const sub  = document.getElementById('conv-agent-sub');
+  sub.textContent = `${conversations.length} session${conversations.length !== 1 ? 's' : ''}`;
+
+  if (conversations.length === 0) {
+    list.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-dim)">No sessions yet.<br>Use O in the bridge to attach one.</div>';
+    return;
+  }
+
+  list.innerHTML = conversations.map(c => `
+    <div class="conv-row focusable" tabindex="0" data-conv-id="${escHtml(c.id)}">
+      <div class="conv-title">${escHtml(c.title || c.id.substring(0, 8))}</div>
+      <div class="conv-meta">${escHtml(c.id.substring(0, 8))} · ${relativeTime(c.created_at)}</div>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('.conv-row').forEach(row => {
+    row.addEventListener('click', () => openConversation(row.dataset.convId));
+  });
+}
+
+function openConversation(conversationId) {
+  activeConversationId = conversationId;
+  const conv  = conversations.find(c => c.id === conversationId);
+  const agent = agents.find(a => a.id === activeAgentId);
+
+  document.getElementById('detail-agent-name').textContent = conv?.title || conversationId.substring(0, 8);
+  document.getElementById('detail-agent-status').textContent = statusLabel(agent?.status);
   const dd = document.getElementById('detail-dot');
-  if (dd) dd.className = 'dot ' + statusToDot(agent.status);
+  if (dd) dd.className = 'dot ' + statusToDot(agent?.status);
 
   document.getElementById('messages-list').innerHTML =
-    '<div class="msg agent" style="color:var(--text-dim)">Listening for activity…</div>';
+    '<div class="msg agent" style="color:var(--text-dim)">Loading messages…</div>';
 
   showView('detail');
+  sendBroadcast(activeAgentId, 'fetch_history', {
+    conversation_id: conversationId,
+    request_id: String(Date.now()),
+  });
+}
+
+function cleanContent(text) {
+  if (!text) return '';
+  return text
+    // Remove <task-notification>...</task-notification> blocks
+    .replace(/<task-notification[\s\S]*?<\/task-notification>/gi, '')
+    // Remove <result>...</result> blocks (tool output)
+    .replace(/<result[\s\S]*?<\/result>/gi, '')
+    // Remove <usage>...</usage> blocks
+    .replace(/<usage[\s\S]*?<\/usage>/gi, '')
+    // Remove other XML-style metadata tags (self-closing or paired)
+    .replace(/<total_tokens[\s\S]*?<\/total_tokens>/gi, '')
+    .replace(/<tool_uses[\s\S]*?<\/tool_uses>/gi, '')
+    .replace(/<duration_ms[\s\S]*?<\/duration_ms>/gi, '')
+    // Strip any remaining unknown XML tags
+    .replace(/<[a-z_][a-z0-9_-]*(?:\s[^>]*)?>[\s\S]*?<\/[a-z_][a-z0-9_-]*>/gi, '')
+    .replace(/<[a-z_][a-z0-9_-]*(?:\s[^>]*)?\/>/gi, '')
+    .trim();
 }
 
 function appendMessage(msg) {
   const list = document.getElementById('messages-list');
+  const placeholder = list.querySelector('.msg[style]');
+  if (placeholder) placeholder.remove();
+
+  const cleaned = cleanContent(msg.content);
+  if (!cleaned) return;
+
   const div = document.createElement('div');
   div.className = 'msg ' + msg.role;
-  div.textContent = msg.content;
+  div.innerHTML = marked.parse(cleaned);
   list.appendChild(div);
   list.scrollTop = list.scrollHeight;
 }
 
-// ── Permission request ─────────────────────────────────────────
+// ── Permission ─────────────────────────────────────────────────
 function showPermissionRequest(agentId, tool, payload) {
   const agent = agents.find(a => a.id === agentId);
   activeAgentId = agentId;
   pendingPermission = { agentId, tool, payload };
 
   document.getElementById('perm-agent-name').textContent = agent?.name || 'Agent';
-  document.getElementById('perm-tool-name').textContent = tool || 'Unknown tool';
+  document.getElementById('perm-tool-name').textContent  = tool || 'Unknown tool';
   document.getElementById('perm-detail').textContent =
     typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2).slice(0, 300);
 
@@ -715,33 +756,8 @@ async function respondToPermission(approved) {
   if (!pendingPermission) return;
   const { agentId } = pendingPermission;
   pendingPermission = null;
-
-  // Broadcast the response back via Realtime
-  if (supabase._accessToken) {
-    const wsUrl = SUPABASE_URL.replace('https://', 'wss://') + '/realtime/v1/websocket?apikey=' + SUPABASE_ANON + '&vsn=1.0.0';
-    const ws = new WebSocket(wsUrl);
-    const channelTopic = `realtime:bridge:${agentId}:main`;
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        topic: channelTopic,
-        event: 'phx_join',
-        payload: { config: { broadcast: { self: false } }, access_token: supabase._accessToken },
-        ref: '1',
-      }));
-      setTimeout(() => {
-        ws.send(JSON.stringify({
-          topic: channelTopic,
-          event: 'broadcast',
-          payload: { type: 'permission_response', approved },
-          ref: '2',
-        }));
-        setTimeout(() => ws.close(), 500);
-      }, 300);
-    };
-  }
-
-  showView('detail');
+  sendBroadcast(agentId, 'permission_response', { approved });
+  showView(activeConversationId ? 'detail' : 'conversations');
 }
 
 // ── Keyboard navigation ────────────────────────────────────────
@@ -764,66 +780,28 @@ function moveFocus(dir) {
 }
 
 document.addEventListener('keydown', (e) => {
-  // ── Setup view: digit picker ─────────────────────────
-  if (currentView === 'setup') {
-    if (e.key === DPAD.UP) {
-      DIGITS[digitPos] = (DIGITS[digitPos] + 1) % 10;
-      updateDigitDisplay();
-    } else if (e.key === DPAD.DOWN) {
-      DIGITS[digitPos] = (DIGITS[digitPos] + 9) % 10;
-      updateDigitDisplay();
-    } else if (e.key === DPAD.RIGHT) {
-      digitPos = Math.min(5, digitPos + 1);
-      updateDigitDisplay();
-    } else if (e.key === DPAD.LEFT) {
-      digitPos = Math.max(0, digitPos - 1);
-      updateDigitDisplay();
-    } else if (e.key === DPAD.OK) {
-      redeemCode(DIGITS.join(''));
-    }
-    e.preventDefault();
-    return;
-  }
-
-  // ── Loading view: retry on Enter ─────────────────────
   if (currentView === 'loading') {
     if (e.key === DPAD.OK) boot();
-    e.preventDefault();
-    return;
+    e.preventDefault(); return;
   }
-
-  // ── Permission view ───────────────────────────────────
   if (currentView === 'permission') {
     if (e.key === DPAD.OK)   respondToPermission(true);
     if (e.key === DPAD.BACK) respondToPermission(false);
     if (e.key === DPAD.LEFT || e.key === DPAD.RIGHT) moveFocus(e.key === DPAD.LEFT ? 'left' : 'right');
-    e.preventDefault();
-    return;
+    e.preventDefault(); return;
   }
-
-  // ── Agents / detail: general nav ─────────────────────
   if (e.key === DPAD.UP)   moveFocus('up');
   if (e.key === DPAD.DOWN) moveFocus('down');
   if (e.key === DPAD.OK) {
     const el = document.activeElement;
     if (el?.classList.contains('focusable')) el.click();
   }
-  if (e.key === DPAD.BACK && currentView === 'detail') {
-    activeAgentId = null;
-    showView('agents');
+  if (e.key === DPAD.BACK) {
+    if (currentView === 'detail')         { activeConversationId = null; showView('conversations'); }
+    else if (currentView === 'conversations') { activeAgentId = null; showView('agents'); }
   }
-
   e.preventDefault();
 });
-
-// ── Digit display ──────────────────────────────────────────────
-function updateDigitDisplay() {
-  for (let i = 0; i < 6; i++) {
-    const cell = document.getElementById('dc-' + i);
-    cell.textContent = DIGITS[i];
-    cell.classList.toggle('active', i === digitPos);
-  }
-}
 
 // ── Utility ────────────────────────────────────────────────────
 function statusToDot(s) {
@@ -835,28 +813,198 @@ function statusToDot(s) {
 
 function statusLabel(s) {
   const map = {
-    offline: 'Offline',
-    online: 'Online',
-    idle: 'Idle',
-    thinking: 'Thinking…',
-    using_tool: 'Using tool',
-    responding: 'Responding…',
-    awaiting_permission: 'Waiting for approval',
+    offline: 'Offline', online: 'Online', idle: 'Idle',
+    thinking: 'Thinking…', using_tool: 'Using tool',
+    responding: 'Responding…', awaiting_permission: 'Waiting for approval',
     stop_requested: 'Stopping…',
   };
   return map[s] || s || 'Unknown';
+}
+
+function relativeTime(isoStr) {
+  if (!isoStr) return '';
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1)  return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)  return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
 }
 
 function escHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 }
 
-// ── Permission buttons ─────────────────────────────────────────
+// ── User message input ─────────────────────────────────────────
+function sendUserMessage(text) {
+  if (!text?.trim() || !activeConversationId || !activeAgentId) return;
+  appendMessage({ role: 'user', content: text.trim() });
+  sendBroadcast(activeAgentId, 'user_message', {
+    conversation_id: activeConversationId,
+    content: text.trim(),
+    user_id: 'local',
+  });
+}
+
+function autoResizeInput(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function initInputArea() {
+  // Preset buttons
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => sendUserMessage(btn.dataset.msg));
+  });
+
+  // Desktop input: show if not on glasses (no MetaWearable UA)
+  const isGlasses = /MetaWearable/i.test(navigator.userAgent);
+  if (!isGlasses) {
+    document.getElementById('desktop-input-row').style.display = 'flex';
+  }
+
+  const msgInput = document.getElementById('desktop-msg-input');
+  const btnSend  = document.getElementById('btn-send-msg');
+  const btnVoice = document.getElementById('btn-voice');
+
+  function submitInput() {
+    const val = msgInput.value.trim();
+    if (val) {
+      sendUserMessage(val);
+      msgInput.value = '';
+      autoResizeInput(msgInput);
+    }
+  }
+
+  // Auto-resize on input
+  msgInput.addEventListener('input', () => autoResizeInput(msgInput));
+
+  // Prevent dpad handler from eating keystrokes while typing.
+  // Enter = send, Shift+Enter = new line.
+  msgInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      submitInput();
+      e.preventDefault();
+    }
+    e.stopPropagation();
+  });
+
+  btnSend.addEventListener('click', submitInput);
+
+  // ── Voice input ──────────────────────────────────────────────
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    btnVoice.disabled = true;
+    btnVoice.title = 'Spraakherkenning niet beschikbaar in deze browser';
+    return;
+  }
+
+  let recognition    = null;
+  let isRecording    = false;
+  let shouldRestart  = false; // true while user hasn't explicitly stopped
+  let accumulatedFinal = '';  // committed final text across restarts
+
+  const btnClear = document.getElementById('btn-clear-input');
+
+  // Show/hide clear button when textarea has content
+  function updateClearBtn() {
+    btnClear.style.display = msgInput.value.trim() ? 'block' : 'none';
+  }
+  msgInput.addEventListener('input', updateClearBtn);
+  btnClear.addEventListener('click', () => {
+    msgInput.value = '';
+    accumulatedFinal = '';
+    autoResizeInput(msgInput);
+    updateClearBtn();
+    msgInput.focus();
+  });
+
+  function buildRecognition(lang) {
+    const r = new SpeechRecognition();
+    r.lang            = lang;
+    r.interimResults  = true;
+    r.continuous      = true; // keep going until explicitly stopped
+
+    r.addEventListener('result', (e) => {
+      let sessionFinal = '';
+      let interim      = '';
+      for (const result of e.results) {
+        if (result.isFinal) sessionFinal += result[0].transcript;
+        else                interim      += result[0].transcript;
+      }
+      const full = accumulatedFinal + sessionFinal;
+      msgInput.value = full + interim;
+      autoResizeInput(msgInput);
+      updateClearBtn();
+      // Commit finals so next interim appends correctly
+      if (sessionFinal) accumulatedFinal = full;
+    });
+
+    r.addEventListener('end', () => {
+      // Auto-restart when browser cuts off, unless user stopped
+      if (shouldRestart) {
+        recognition = buildRecognition(r.lang);
+        recognition.start();
+        return;
+      }
+      isRecording = false;
+      btnVoice.classList.remove('recording');
+      // Trim any dangling interim residue
+      msgInput.value = accumulatedFinal.trimEnd();
+      autoResizeInput(msgInput);
+      updateClearBtn();
+      if (msgInput.value) msgInput.focus();
+    });
+
+    r.addEventListener('error', (e) => {
+      if (e.error === 'language-not-supported' && r.lang !== 'en-US') {
+        recognition = buildRecognition('en-US');
+        recognition.start();
+        return;
+      }
+      // On 'no-speech' or 'aborted' keep going if user hasn't stopped
+      if (shouldRestart && e.error !== 'not-allowed' && e.error !== 'service-not-allowed') return;
+      shouldRestart = false;
+      isRecording   = false;
+      btnVoice.classList.remove('recording');
+    });
+
+    return r;
+  }
+
+  function startRecording() {
+    accumulatedFinal = msgInput.value;
+    if (accumulatedFinal && !accumulatedFinal.endsWith(' ')) accumulatedFinal += ' ';
+    shouldRestart = true;
+    isRecording   = true;
+    btnVoice.classList.add('recording');
+    recognition = buildRecognition('nl-NL');
+    recognition.start();
+  }
+
+  function stopRecording() {
+    shouldRestart = false;
+    if (recognition) recognition.stop();
+  }
+
+  btnVoice.addEventListener('click', () => {
+    if (isRecording) stopRecording();
+    else             startRecording();
+  });
+}
+
+// ── Buttons ────────────────────────────────────────────────────
 document.getElementById('btn-approve').addEventListener('click', () => respondToPermission(true));
 document.getElementById('btn-deny').addEventListener('click',    () => respondToPermission(false));
-document.getElementById('btn-back').addEventListener('click',    () => { activeAgentId = null; showView('agents'); });
+document.getElementById('btn-back').addEventListener('click', () => {
+  activeConversationId = null; showView('conversations');
+});
+document.getElementById('btn-conv-back').addEventListener('click', () => {
+  activeAgentId = null; showView('agents');
+});
 
-// ── Start ──────────────────────────────────────────────────────
+initInputArea();
 boot();
 </script>
 </body>

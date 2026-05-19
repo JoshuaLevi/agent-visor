@@ -78,7 +78,7 @@ const codexCliDriver = {
     if (SKIP_PERMISSIONS) {
       console.log("[Codex CLI] CODEX_SKIP_PERMISSIONS=true — will use --dangerously-bypass-approvals-and-sandbox");
     } else {
-      console.log("[Codex CLI] MCP permission routing enabled — permissions will be forwarded to Lens UI");
+      console.log("[Codex CLI] MCP permission routing enabled — permissions will be forwarded to AgentVisor");
     }
   },
 

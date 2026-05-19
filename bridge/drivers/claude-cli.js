@@ -90,7 +90,7 @@ const claudeCliDriver = {
     if (SKIP_PERMISSIONS) {
       console.log("[Claude CLI] CLAUDE_SKIP_PERMISSIONS=true — will use --dangerously-skip-permissions");
     } else {
-      console.log("[Claude CLI] MCP permission routing enabled — permissions will be forwarded to Lens UI");
+      console.log("[Claude CLI] MCP permission routing enabled — permissions will be forwarded to AgentVisor");
     }
   },
 

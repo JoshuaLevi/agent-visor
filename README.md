@@ -4,6 +4,21 @@ Monitor your AI coding agents (Claude Code, Codex) directly on your Meta Ray-Ban
 
 ---
 
+## Quick start overview
+
+```
+1. Create a Supabase project  →  run the SQL migration (one file, no edge functions)
+2. Fill in webapp/config.js   →  deploy to Vercel (HTTPS)
+3. iPhone: Meta AI app → Developer Mode → App Connections → add your Vercel URL
+4. Put on glasses → AgentVisor opens directly, no login or code entry needed
+5. Mac: cd bridge && npm install && node sync.js → add an agent → activate it
+6. Glasses show your agent live — approve permissions with the Neural Band
+```
+
+Steps 1–2 are one-time setup. Step 3 is what puts the app on your glasses. The app opens directly to the agent list — no accounts, no pairing codes.
+
+---
+
 ## What it does
 
 - **Agent Monitor** — see which agents are running, what they're doing, and their current status in real time
@@ -49,17 +64,10 @@ cd agentvisor
 ### 2. Create a Supabase project
 
 1. Go to [supabase.com](https://supabase.com) and create a new project
-2. In the SQL editor, run the contents of `supabase/migrations/20250515000000_init.sql`
-3. In the Edge Functions section, deploy each function from `supabase/functions/` — or use the Supabase CLI:
+2. In the SQL editor, run the contents of `supabase/migrations/20250518000000_no_auth.sql`
+3. Note your **Project URL** and **anon key** from Project Settings → API
 
-```bash
-npm install -g supabase
-supabase login
-supabase link --project-ref <your-project-id>
-supabase functions deploy
-```
-
-4. Note your **Project URL** and **anon key** from Project Settings → API
+No edge functions to deploy — everything uses the Supabase REST API directly.
 
 ### 3. Configure the webapp
 
@@ -85,11 +93,15 @@ Note the URL Vercel gives you, e.g. `https://agentvisor.vercel.app`.
 
 ### 5. Add the webapp to your glasses
 
-1. Open the Meta AI app on your iPhone
-2. Go to **Settings → Developer Mode** (tap version number 5× to enable if needed)
-3. Go to **App Connections → Add**
-4. Enter your Vercel URL
-5. The app will now appear when you open it on your glasses
+Meta Web Apps are loaded onto the glasses through the **Meta AI app on your iPhone** — there is no app store or sideloading involved. Any HTTPS URL can be registered as an app.
+
+1. Open the **Meta AI app** on your iPhone
+2. Enable Developer Mode if needed: go to **Settings**, find the app version number, tap it **5 times** until you see "Developer Mode enabled"
+3. Go to **Settings → Developer Mode → App Connections → Add**
+4. Enter your Vercel URL (e.g. `https://agentvisor.vercel.app`)
+5. Put on your glasses and open AgentVisor from the app launcher
+
+The app will stay registered — you only need to add it once. If it doesn't appear, verify that your URL is HTTPS (plain HTTP is rejected).
 
 ### 6. Configure the Bridge CLI
 
@@ -115,30 +127,7 @@ npm install
 
 ## First-time use
 
-### Authenticate your glasses
-
-Because the glasses browser has no keyboard, authentication uses a one-time 6-digit code:
-
-1. Open `https://your-agentvisor-url/setup.html` in your **phone or desktop browser**
-2. Sign in (or create an account — it happens automatically on first login)
-3. A 6-digit code appears on screen with a 5-minute countdown
-
-4. Put on your glasses and open AgentVisor from the Meta AI app
-5. You'll see the **Enter Code** screen with a digit picker
-
-   ```
-   ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐
-   │  8  │ │  4  │ │  7  │ │  2  │ │  9  │ │  1  │
-   └─────┘ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘
-   ```
-
-   - **Up/Down** — change the selected digit
-   - **Left/Right** — move between digits
-   - **Enter (tap Neural Band)** — confirm
-
-6. Once confirmed, your glasses are linked. The session is saved — you won't need to do this again unless you clear your browser data.
-
-### Pair your first agent
+### Add your first agent
 
 Run the Bridge CLI on your Mac:
 
@@ -147,11 +136,11 @@ cd bridge
 node sync.js
 ```
 
-Select **Add new agent** and choose your agent type (Claude Code or Codex). A 6-digit pairing code appears in your terminal.
+Select **Add new agent**, choose Claude Code or Codex, give it a name. The agent is registered in your Supabase project immediately — no pairing codes, no phone needed.
 
-On your glasses, navigate to the agent list — the pairing prompt will appear automatically. Enter the code the same way you did during setup.
+### Open on your glasses
 
-Your agent is now paired.
+Put on your glasses and open AgentVisor from the app launcher. The agent list appears straight away. No login screen, no code entry.
 
 ---
 
@@ -220,7 +209,6 @@ These map to `ArrowDown/Up`, `Enter`, and `Escape` in the web app.
 agentvisor/
 ├── webapp/
 │   ├── index.html        # Glasses app (600×600)
-│   ├── setup.html        # Desktop/phone setup page
 │   └── vercel.json
 ├── bridge/
 │   ├── sync.js           # CLI entry point
@@ -229,9 +217,10 @@ agentvisor/
 │   │   └── codex-cli.js  # Codex integration
 │   ├── package.json
 │   └── .env.example
-└── supabase/
-    ├── migrations/       # Database schema
-    └── functions/        # Edge functions (8 total)
+├── supabase/
+│   └── migrations/       # Database schema (single file, no edge functions)
+└── docs/
+    └── adr-001-no-auth.md  # Why the auth layer was removed
 ```
 
 ---
@@ -240,11 +229,14 @@ agentvisor/
 
 | Problem | Solution |
 |---------|----------|
-| App not visible on glasses | Confirm HTTPS hosting and that the URL is added in Meta AI app → App Connections |
-| "Invalid or expired code" on glasses | Code has 5-min TTL — generate a new one on the setup page |
-| Agent shows as offline | Run `node sync.js` on your Mac and activate the agent |
+| App not visible on glasses | Confirm your URL is HTTPS; verify it's added in Meta AI app → Settings → Developer Mode → App Connections |
+| Developer Mode option not visible | Tap the version number in Meta AI app Settings exactly 5 times |
+| Agent list empty on glasses | Run `node sync.js` on your Mac, add an agent, then activate it |
+| Agent shows as offline | Activate the agent from `node sync.js` — it only goes online when the bridge is running |
 | Permission overlay doesn't appear | Make sure `CLAUDE_SKIP_PERMISSIONS=false` in bridge `.env` |
 | Realtime updates not arriving | Check that your Supabase project has Realtime enabled (Dashboard → Realtime) |
+| Config missing error on glasses | You deployed before filling in `webapp/config.js` — add your Supabase values and redeploy |
+| "Failed to connect" on glasses | Verify `supabaseUrl` and `supabaseAnon` in `config.js` are correct |
 
 ---
 

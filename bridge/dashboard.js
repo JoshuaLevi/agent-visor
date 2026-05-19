@@ -82,6 +82,7 @@ export class Dashboard {
     this.onQuit = null;
     this.onBack = null;
     this.onOpenConversation = null;
+    this.onScanSessions = null;
 
     // Suspended while main menu is shown (agents still running)
     this.suspended = false;
@@ -206,6 +207,8 @@ export class Dashboard {
         const key = data.toString();
         if (key === "q" || key === "Q" || key === "\x03") {
           this.onQuit?.();
+        } else if (key === "o" || key === "O") {
+          this.onScanSessions?.(this._selectedAgentId);
         } else if (key === "b" || key === "B") {
           this.onBack?.();
         } else if (key === "\x1B[A") {
@@ -302,7 +305,7 @@ export class Dashboard {
     }
 
     writeLine(`  ${chalk.cyan("╭─────────────────────────────────────╮")}`);
-    writeLine(`  ${chalk.cyan("│")}  👓  ${chalk.bold("Spectacles Agent Bridge")}        ${chalk.cyan("│")}`);
+    writeLine(`  ${chalk.cyan("│")}  👓  ${chalk.bold("AgentVisor Bridge")}              ${chalk.cyan("│")}`);
     writeLine(`  ${chalk.cyan("╰─────────────────────────────────────╯")}`);
     writeLine("");
 
@@ -369,7 +372,7 @@ export class Dashboard {
 
     const hb = this._heartbeatLine(now);
     const up = formatUptime(now - this.startTime);
-    const navHint = chalk.dim("↑↓ navigate · ⏎ open in CLI · tab: switch · b: menu · q quit");
+    const navHint = chalk.dim("↑↓ navigate · ⏎ open in CLI · tab: switch · o: find session · b: menu · q quit");
     writeLine(`  ${hb}  ${chalk.dim("│")}  ${chalk.dim("⏱")}  ${up}  ${chalk.dim("│")}  ${navHint}`);
 
     writeLine(`  ${chalk.dim("─".repeat(Math.min(cols - 4, 46)))}`);

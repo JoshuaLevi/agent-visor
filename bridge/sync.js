@@ -25,6 +25,9 @@ const SUPABASE_URL          = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY     = process.env.SUPABASE_ANON_KEY;
 const AGENTS_FILE           = join(homedir(), ".agentvisor_agents.json");
 const OLD_DEVICE_FILE       = join(__dirname, ".bridge_device.json");
+const MCP_SERVER_PATH       = join(__dirname, "mcp-permission-server.js");
+const AGENTVISOR_DIR        = join(homedir(), ".agentvisor");
+const CLAUDE_PROJECTS_DIR   = join(homedir(), ".claude", "projects");
 
 function checkEnv() {
   if (!existsSync(ENV_PATH)) {
@@ -755,6 +758,131 @@ async function mainMenu(statusMessage = null, lastFocus = null) {
 const CLAUDE_SESSIONS_DIR_DEFAULT = join(homedir(), ".bridge-claude-sessions");
 const CODEX_SESSIONS_DIR_DEFAULT  = join(homedir(), ".bridge-codex-sessions");
 
+// Write a shell script to disk and open it in a new Terminal window.
+// Avoids all escaping issues by never passing the command through osascript strings.
+function openInTerminal(bin, args, cwd) {
+  mkdirSync(AGENTVISOR_DIR, { recursive: true });
+  const scriptId = randomUUID().slice(0, 8);
+  const scriptPath = join(AGENTVISOR_DIR, `launch-${scriptId}.sh`);
+
+  const lines = ["#!/usr/bin/env bash", `cd ${JSON.stringify(cwd)}`, `exec ${JSON.stringify(bin)} ${args.map(a => JSON.stringify(a)).join(" ")}`];
+  writeFileSync(scriptPath, lines.join("\n") + "\n", { mode: 0o700 });
+
+  const os = platform();
+  if (os === "darwin") {
+    const osaScript = `tell application "Terminal"\n  do script ${JSON.stringify(`bash ${scriptPath}`)}\n  activate\nend tell`;
+    spawn("osascript", ["-e", osaScript], { detached: true, stdio: "ignore" }).unref();
+    return true;
+  }
+  if (os === "win32") {
+    spawn("cmd", ["/c", "start", "bash", scriptPath], { detached: true, stdio: "ignore", shell: true }).unref();
+    return true;
+  }
+  for (const term of ["x-terminal-emulator", "gnome-terminal", "xterm"]) {
+    try {
+      const termArgs = term === "gnome-terminal" ? ["--", "bash", scriptPath] : ["-e", `bash ${scriptPath}`];
+      spawn(term, termArgs, { detached: true, stdio: "ignore" }).unref();
+      return true;
+    } catch { /* try next */ }
+  }
+  return false;
+}
+
+function writePersistentMcpConfig(conversationId) {
+  mkdirSync(AGENTVISOR_DIR, { recursive: true });
+  const configPath = join(AGENTVISOR_DIR, `mcp-${conversationId}.json`);
+  const config = {
+    mcpServers: {
+      "bridge-auth": {
+        command: "node",
+        args: [MCP_SERVER_PATH],
+        env: {
+          BRIDGE_SUPABASE_URL: SUPABASE_URL,
+          BRIDGE_SUPABASE_ANON_KEY: SUPABASE_ANON_KEY,
+          BRIDGE_CONVERSATION_ID: conversationId,
+        },
+      },
+    },
+  };
+  writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  return configPath;
+}
+
+// Decode a Claude project slug back to a filesystem path.
+// Claude slugs replace '/' with '-', so '-Users-joshua-foo-bar' could map to
+// '/Users/joshua/foo/bar' OR '/Users/joshua/foo-bar'. Strategy: at each level,
+// first try consuming ALL remaining parts as one segment (check disk); if that
+// path exists, we're done. Otherwise descend into the shortest matching directory
+// prefix and recurse.
+function decodeClaudeProjectSlug(slug) {
+  const parts = slug.replace(/^-/, "").split("-");
+
+  function build(parts, current) {
+    if (parts.length === 0) return current;
+
+    // Try the whole remaining slug as one directory name first.
+    const whole = join(current, parts.join("-"));
+    try { statSync(whole); return whole; } catch { /* doesn't exist, keep going */ }
+
+    // Descend into the shortest prefix that is an existing directory.
+    for (let k = 1; k < parts.length; k++) {
+      const candidate = join(current, parts.slice(0, k).join("-"));
+      try {
+        if (statSync(candidate).isDirectory()) {
+          return build(parts.slice(k), candidate);
+        }
+      } catch { /* not a dir */ }
+    }
+
+    return whole; // fallback
+  }
+
+  return build(parts, "/");
+}
+
+// Returns a list of recent Claude project sessions from ~/.claude/projects/
+// Each entry: { projectSlug, projectPath, sessionId, lastModified }
+function scanClaudeProjectSessions() {
+  if (!existsSync(CLAUDE_PROJECTS_DIR)) return [];
+
+  const results = [];
+
+  for (const slug of readdirSync(CLAUDE_PROJECTS_DIR)) {
+    const projectDir = join(CLAUDE_PROJECTS_DIR, slug);
+    let stat;
+    try { stat = statSync(projectDir); } catch { continue; }
+    if (!stat.isDirectory()) continue;
+
+    const projectPath = decodeClaudeProjectSlug(slug);
+
+    // Find the most recently modified .jsonl session file
+    let latestSession = null;
+    let latestMtime = 0;
+    try {
+      for (const f of readdirSync(projectDir)) {
+        if (!f.endsWith(".jsonl")) continue;
+        const fPath = join(projectDir, f);
+        const fStat = statSync(fPath);
+        if (fStat.mtimeMs > latestMtime) {
+          latestMtime = fStat.mtimeMs;
+          latestSession = f.replace(".jsonl", "");
+        }
+      }
+    } catch { continue; }
+
+    if (!latestSession) continue;
+
+    results.push({
+      projectSlug: slug,
+      projectPath,
+      sessionId: latestSession,
+      lastModified: latestMtime,
+    });
+  }
+
+  return results.sort((a, b) => b.lastModified - a.lastModified);
+}
+
 async function resumeConversationInteractive(conversation, agentType) {
   const claudeBin = process.env.CLAUDE_BIN || "claude";
   const codexBin  = process.env.CODEX_BIN  || "codex";
@@ -829,6 +957,85 @@ async function browseConversations(agent) {
   return null;
 }
 
+// ── Scan & Attach Existing Claude Session ───────────────────────────────────
+
+async function scanAndAttachClaudeSession(agent) {
+  if (agent.agent_type !== "claude") {
+    return chalk.yellow("  ⚠ Scan sessions is only supported for Claude agents.");
+  }
+
+  const sessions = scanClaudeProjectSessions();
+
+  if (sessions.length === 0) {
+    return chalk.dim("  No Claude sessions found in ~/.claude/projects/");
+  }
+
+  const choices = [
+    { name: chalk.dim("← Back"), value: null },
+    ...sessions.slice(0, 20).map((s) => {
+      const date = new Date(s.lastModified);
+      const dateStr = date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+        + " " + date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      const label = s.projectPath.length > 55
+        ? "…" + s.projectPath.slice(-54)
+        : s.projectPath;
+      return {
+        name: `${label}  ${chalk.dim(dateStr)}`,
+        value: s,
+      };
+    }),
+  ];
+
+  let selected;
+  try {
+    selected = await select({
+      message: "Select a Claude session to attach",
+      choices,
+      loop: false,
+    });
+  } catch (err) {
+    if (err.name === "ExitPromptError") return null;
+    throw err;
+  }
+
+  if (!selected) return null;
+
+  // Register in localDb so the permission watcher can route requests for this session.
+  const projectName = selected.projectPath.split("/").pop() ?? selected.projectPath;
+  const createdAt = new Date().toISOString();
+  localDb.insertConversation(
+    selected.sessionId,
+    agent.agent_id,
+    "local",
+    projectName,
+    createdAt,
+    null,
+    selected.projectPath,
+  );
+
+  const claudeBin = process.env.CLAUDE_BIN || "claude";
+  const mcpConfigPath = writePersistentMcpConfig(selected.sessionId);
+
+  const args = [
+    "--resume", selected.sessionId,
+    "--mcp-config", mcpConfigPath,
+    "--permission-prompt-tool", "mcp__bridge-auth__bridge_permission_tool",
+  ];
+
+  if (!openInTerminal(claudeBin, args, selected.projectPath)) {
+    return { ok: false, message: chalk.red("  ✗ Could not open a terminal window") };
+  }
+
+  return {
+    ok: true,
+    message: chalk.green(`  ✓ Terminal opened — session ${selected.sessionId.substring(0, 8)}… with AgentVisor permission routing`),
+    sessionId: selected.sessionId,
+    agentId: agent.agent_id,
+    projectName,
+    createdAt,
+  };
+}
+
 // ── Agent Sub-Menu ──────────────────────────────────────────────────────────
 
 async function agentSubMenu(agent) {
@@ -842,6 +1049,7 @@ async function agentSubMenu(agent) {
     { name: "Manage models", value: "models" },
     { name: `Screen sharing (${artifactsStatus})`, value: "artifacts" },
     { name: "Conversations", value: "conversations" },
+    { name: "Find existing Claude session", value: "scan_sessions" },
     { name: "Rename", value: "rename" },
     { name: "Remove", value: "remove" },
   ];
@@ -860,6 +1068,8 @@ async function agentSubMenu(agent) {
       return manageModels(agent);
     case "conversations":
       return browseConversations(agent);
+    case "scan_sessions":
+      return scanAndAttachClaudeSession(agent);
     case "rename": {
       const newName = await input({
         message: "Enter new name",
@@ -867,32 +1077,18 @@ async function agentSubMenu(agent) {
       });
       if (!newName.trim() || newName.trim() === displayName) return null;
       updateSavedAgent(agent.agent_id, { name: newName.trim() });
-      if (agent.credentials) {
-        try {
-          const { createClient } = await import("@supabase/supabase-js");
-          const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-          const { data, error } = await sb.auth.signInWithPassword({
-            email: agent.credentials.email,
-            password: agent.credentials.password,
-          });
-          if (error) {
-            console.log(chalk.yellow(`  ⚠ Could not sync rename to Supabase: ${error.message}`));
-          } else {
-            const res = await fetch(`${SUPABASE_URL}/functions/v1/bridge_update_name`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${data.session.access_token}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ agent_id: agent.agent_id, name: newName.trim() }),
-            });
-            if (!res.ok) {
-              console.log(chalk.yellow(`  ⚠ Could not sync rename to Supabase: ${await res.text()}`));
-            }
-          }
-        } catch (err) {
-          console.log(chalk.yellow(`  ⚠ Could not sync rename to Supabase: ${err.message}`));
-        }
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/bridge_agents?id=eq.${agent.agent_id}`, {
+          method: "PATCH",
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ name: newName.trim() }),
+        });
+      } catch (err) {
+        console.log(chalk.yellow(`  ⚠ Could not sync rename to Supabase: ${err.message}`));
       }
       return chalk.green(`  ✓ Renamed to: ${newName.trim()}`);
     }
@@ -933,163 +1129,35 @@ async function addNewAgent() {
 
   if (!agentName.trim()) return null;
 
-  console.log(chalk.dim("\n  Registering with Supabase..."));
+  console.log(chalk.dim("\n  Registering agent…"));
 
-  const regBody = { agent_type: agentType, name: agentName };
-
-  let regRes;
+  let agentId;
   try {
-    regRes = await fetch(`${SUPABASE_URL}/functions/v1/register_bridge`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/bridge_agents`, {
       method: "POST",
       headers: {
+        apikey: SUPABASE_ANON_KEY,
         Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
         "Content-Type": "application/json",
+        Prefer: "return=representation",
       },
-      body: JSON.stringify(regBody),
+      body: JSON.stringify({ name: agentName, agent_type: agentType }),
     });
+    if (!res.ok) {
+      return chalk.red(`  ✗ Registration failed: ${await res.text()}`);
+    }
+    const [row] = await res.json();
+    agentId = row.id;
   } catch (err) {
     return chalk.red(`  ✗ Could not reach Supabase: ${err.message}`);
   }
 
-  if (!regRes.ok) {
-    return chalk.red(`  ✗ Registration failed: ${await regRes.text()}`);
-  }
-
-  const { agent_id, pairing_code, poll_token, expires_at } = await regRes.json();
-  const expiresMs = new Date(expires_at).getTime();
-
-  console.clear();
-  console.log();
-  console.log(chalk.bold("  ┌─────────────────────────────────────┐"));
-  console.log(chalk.bold(`  │  Pairing code: ${chalk.green.bold(pairing_code)}              │`));
-  console.log(chalk.bold("  │                                     │"));
-  console.log(chalk.bold("  │  Enter this code in AgentVisor app   │"));
-  console.log(chalk.bold("  └─────────────────────────────────────┘"));
-  console.log();
-  console.log(chalk.dim("  Waiting for approval... Press 'c' to cancel.\n"));
-
-  const EXPIRED_SENTINEL = "expired";
-
-  async function cancelRegistration() {
-    try {
-      await fetch(`${SUPABASE_URL}/functions/v1/poll_bridge`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ agent_id, poll_token, cancel: true }),
-      });
-    } catch {}
-  }
-
-  async function fetchCredentials() {
-    const pollRes = await fetch(`${SUPABASE_URL}/functions/v1/poll_bridge`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ agent_id, poll_token }),
-    });
-    const data = await pollRes.json();
-    if (data.status === "approved") return data.credentials;
-    return null;
-  }
-
-  const credentials = await new Promise((resolve, reject) => {
-    let settled = false;
-    function settle(value) {
-      if (settled) return;
-      settled = true;
-      clearInterval(fallbackInterval);
-      cleanupRealtime();
-      cleanupStdin();
-      resolve(value);
-    }
-    function fail(err) {
-      if (settled) return;
-      settled = true;
-      clearInterval(fallbackInterval);
-      cleanupRealtime();
-      cleanupStdin();
-      reject(err);
-    }
-
-    // Realtime subscription for near-instant detection
-    const realtimeSb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    const realtimeChannel = realtimeSb
-      .channel(`pairing-watch:${agent_id}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "bridge_agents", filter: `id=eq.${agent_id}` },
-        async (payload) => {
-          if (settled || !payload.new.owner_id) return;
-          try {
-            const creds = await fetchCredentials();
-            if (creds) settle(creds);
-          } catch (err) {
-            fail(err);
-          }
-        },
-      )
-      .subscribe();
-
-    // Fallback poll in case Realtime misses the event
-    const fallbackInterval = setInterval(async () => {
-      if (Date.now() >= expiresMs) {
-        settle(EXPIRED_SENTINEL);
-        return;
-      }
-      try {
-        const creds = await fetchCredentials();
-        if (creds) settle(creds);
-      } catch (err) {
-        fail(err);
-      }
-    }, 10_000);
-
-    function onKeypress(data) {
-      const key = data.toString();
-      if (key === "c" || key === "C") {
-        settle(null);
-      }
-    }
-
-    function cleanupRealtime() {
-      realtimeSb.removeChannel(realtimeChannel);
-    }
-
-    function cleanupStdin() {
-      process.stdin.removeListener("data", onKeypress);
-      if (!process.stdin.isPaused) process.stdin.pause();
-      process.stdin.setRawMode(false);
-    }
-
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.on("data", onKeypress);
+  const enableArtifacts = await confirm({
+    message: "Enable screen sharing? (Allows the AI to send screenshots to your glasses)",
+    default: false,
   });
 
-  if (credentials === EXPIRED_SENTINEL) {
-    await cancelRegistration();
-    return chalk.yellow("  ✗ Pairing code expired. Please try again.");
-  }
-
-  if (!credentials) {
-    await cancelRegistration();
-    return chalk.yellow("  ✗ Agent pairing cancelled.");
-  }
-
-  let enableArtifacts = false;
-  if (!isCursorCloud) {
-    enableArtifacts = await confirm({
-      message: "Enable screen sharing? (Allows the AI to send screenshots to your Spectacles)",
-      default: false,
-    });
-  }
-
-  addSavedAgent({ agent_id, agent_type: agentType, name: agentName, credentials, artifacts_enabled: enableArtifacts });
+  addSavedAgent({ agent_id: agentId, agent_type: agentType, name: agentName, artifacts_enabled: enableArtifacts });
 
   if (agentType === "codex") {
     console.log();
@@ -1100,7 +1168,7 @@ async function addNewAgent() {
     console.log();
   }
 
-  return chalk.green(`  ✓ ${agentName} agent paired and saved!`);
+  return chalk.green(`  ✓ ${agentName} agent registered!`);
 }
 
 // ── Workspace Discovery ─────────────────────────────────────────────────────
@@ -1395,59 +1463,20 @@ async function removeAgent(agent) {
   const yes = await confirm({ message: `Remove ${displayName}?`, default: false });
   if (!yes) return null;
 
-  if (agent.credentials) {
-    try {
-      console.log(chalk.dim("\n  Unpairing from Supabase..."));
-      const { createClient } = await import("@supabase/supabase-js");
-      const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: agent.credentials.email,
-        password: agent.credentials.password,
-      });
-
-      let accessToken = null;
-      if (error) {
-        console.log(chalk.dim("  Sign-in failed, trying credential-based removal..."));
-      } else {
-        accessToken = data.session.access_token;
-      }
-
-      const unpairHeaders = { "Content-Type": "application/json" };
-      const unpairBody = { agent_id: agentId };
-
-      if (accessToken) {
-        unpairHeaders.Authorization = `Bearer ${accessToken}`;
-      } else {
-        unpairHeaders.Authorization = `Bearer ${SUPABASE_ANON_KEY}`;
-        unpairBody.device_email = agent.credentials.email;
-        unpairBody.device_password = agent.credentials.password;
-      }
-
-      const unpairRes = await fetch(`${SUPABASE_URL}/functions/v1/unpair_bridge`, {
-        method: "POST",
-        headers: unpairHeaders,
-        body: JSON.stringify(unpairBody),
-      });
-
-      if (!unpairRes.ok) {
-        if (!accessToken && (unpairRes.status === 401 || unpairRes.status === 404)) {
-          console.log(chalk.dim("  Server data already removed."));
-        } else {
-          const text = await unpairRes.text();
-          console.error(chalk.red(`  ✗ unpair_bridge failed (${unpairRes.status}): ${text}`));
-          const forceRemove = await confirm({ message: "Remove locally anyway? (data will remain in Supabase)", default: false });
-          if (!forceRemove) return chalk.yellow("  ✗ Removal cancelled.");
-          removeSavedAgent(agentId);
-          return chalk.yellow("  ⚠ Agent removed locally. Data may remain in Supabase.");
-        }
-      }
-    } catch (e) {
-      console.error(chalk.red(`  ✗ Could not unpair from Supabase: ${e.message}`));
-      const forceRemove = await confirm({ message: "Remove locally anyway? (data will remain in Supabase)", default: false });
-      if (!forceRemove) return chalk.yellow("  ✗ Removal cancelled.");
-      removeSavedAgent(agentId);
-      return chalk.yellow("  ⚠ Agent removed locally. Data may remain in Supabase.");
+  try {
+    console.log(chalk.dim("\n  Removing from Supabase…"));
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/bridge_agents?id=eq.${agentId}`, {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    });
+    if (!res.ok) {
+      console.log(chalk.yellow(`  ⚠ Supabase removal responded ${res.status} — removing locally anyway.`));
     }
+  } catch (e) {
+    console.log(chalk.yellow(`  ⚠ Could not reach Supabase: ${e.message} — removing locally.`));
   }
 
   removeSavedAgent(agentId);
@@ -1479,24 +1508,20 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
   const conversationQueues = new Map();
   const agentId = agentConfig.agent_id;
 
-  async function callEdgeFunction(functionName, body) {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData?.session?.access_token ?? accessToken;
-
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/${functionName}`, {
-      method: "POST",
+  async function restPatch(table, id, data) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+      method: "PATCH",
       headers: {
-        Authorization: `Bearer ${token}`,
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(data),
     });
-
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`${functionName} failed (${res.status}): ${text}`);
+      throw new Error(`PATCH ${table} failed (${res.status}): ${text}`);
     }
-    return res.json();
   }
 
   async function broadcast(event, payload) {
@@ -1540,41 +1565,17 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
 
   async function sendHeartbeat() {
     try {
-      await callEdgeFunction("bridge_heartbeat", { agent_id: agentId, status: "online" });
+      await restPatch("bridge_agents", agentId, { status: "online", last_seen_at: new Date().toISOString() });
       dashboard.setHeartbeat(agentId, true);
     } catch (err) {
       const status = err.message.match(/\((\d{3})\)/)?.[1];
-
       if (status === "404") {
-        dashboard.log(agentId, chalk.yellow.bold("Agent not found in Supabase — going offline. Re-register or restart to recover."));
+        dashboard.log(agentId, chalk.yellow.bold("Agent not found in Supabase — going offline. Re-add via sync.js to recover."));
         goOffline();
         return;
       }
-
-      if (status === "401") {
-        dashboard.log(agentId, chalk.yellow("Heartbeat returned 401, attempting session refresh..."));
-        const { error: refreshError } = await supabase.auth.refreshSession();
-        if (!refreshError) {
-          try {
-            await callEdgeFunction("bridge_heartbeat", { agent_id: agentId, status: "online" });
-            dashboard.setHeartbeat(agentId, true);
-            return;
-          } catch {}
-        }
-        dashboard.log(agentId, chalk.red("Session refresh failed — agent remains saved but heartbeat is offline."));
-        dashboard.setHeartbeat(agentId, false);
-        return;
-      }
-
       dashboard.setHeartbeat(agentId, false);
-      dashboard.log(agentId, chalk.red(`Heartbeat failed, retrying in ${HEARTBEAT_RETRY_DELAY_MS / 1000}s...`));
-      await sleep(HEARTBEAT_RETRY_DELAY_MS);
-      try {
-        await callEdgeFunction("bridge_heartbeat", { agent_id: agentId, status: "online" });
-        dashboard.setHeartbeat(agentId, true);
-      } catch (retryErr) {
-        dashboard.log(agentId, chalk.red(`Heartbeat retry failed: ${retryErr.message}`));
-      }
+      dashboard.log(agentId, chalk.red(`Heartbeat failed: ${err.message}`));
     }
   }
 
@@ -1772,8 +1773,77 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
     await updateConversationState(conversationId, "idle");
   }
 
+  function parseJsonlHistory(sessionId, workspace) {
+    try {
+      // Try direct re-encoding first; fall back to scanning all project dirs.
+      const directSlug = workspace.replace(/\//g, "-");
+      let jsonlPath = join(CLAUDE_PROJECTS_DIR, directSlug, `${sessionId}.jsonl`);
+      if (!existsSync(jsonlPath)) {
+        let found = false;
+        for (const slug of readdirSync(CLAUDE_PROJECTS_DIR)) {
+          const candidate = join(CLAUDE_PROJECTS_DIR, slug, `${sessionId}.jsonl`);
+          if (existsSync(candidate)) { jsonlPath = candidate; found = true; break; }
+        }
+        if (!found) return [];
+      }
+
+      const lines = readFileSync(jsonlPath, "utf8").split("\n");
+      const messages = [];
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+
+        if (entry.type === "user" && entry.message?.role === "user" && !entry.toolUseResult) {
+          const raw = entry.message.content;
+          const text = typeof raw === "string"
+            ? raw
+            : Array.isArray(raw)
+              ? raw.filter((b) => b.type === "text").map((b) => b.text).join("\n")
+              : null;
+          if (text?.trim()) {
+            messages.push({
+              id: entry.uuid ?? randomUUID(),
+              conversation_id: sessionId,
+              role: "user",
+              content: text.trim(),
+              created_at: entry.timestamp ?? new Date().toISOString(),
+            });
+          }
+        } else if (entry.type === "assistant" && entry.message?.role === "assistant") {
+          const content = entry.message.content;
+          const text = Array.isArray(content)
+            ? content.filter((b) => b.type === "text").map((b) => b.text).join("\n")
+            : typeof content === "string" ? content : null;
+          if (text?.trim()) {
+            messages.push({
+              id: entry.uuid ?? randomUUID(),
+              conversation_id: sessionId,
+              role: "agent",
+              content: text.trim(),
+              created_at: entry.timestamp ?? new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      return messages;
+    } catch {
+      return [];
+    }
+  }
+
   async function handleFetchHistory(conversationId, requestId, limit = null) {
-    const messages = localDb.getMessages(conversationId, limit);
+    let messages = localDb.getMessages(conversationId, limit);
+
+    if (messages.length === 0) {
+      const conv = localDb.getConversation(conversationId);
+      if (conv?.workspace) {
+        messages = parseJsonlHistory(conversationId, conv.workspace);
+      }
+    }
+
     const payload = { conversation_id: conversationId, request_id: requestId, messages };
     if (JSON.stringify(payload).length > 200_000) {
       const stripped = messages.map(({ images: _, ...m }) => m);
@@ -1832,9 +1902,14 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
 
     let bin, args, cwd;
     if (aType === "claude") {
-      bin  = claudeBin;
-      args = ["--resume", conversation_id];
-      cwd  = conv.workspace || CLAUDE_SESSIONS_DIR_DEFAULT;
+      bin = claudeBin;
+      const mcpConfigPath = writePersistentMcpConfig(conversation_id);
+      args = [
+        "--resume", conversation_id,
+        "--mcp-config", mcpConfigPath,
+        "--permission-prompt-tool", "mcp__bridge-auth__bridge_permission_tool",
+      ];
+      cwd = conv.workspace || CLAUDE_SESSIONS_DIR_DEFAULT;
     } else {
       bin  = codexBin;
       args = [];
@@ -1843,40 +1918,10 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
       cwd  = conv.workspace || convDir;
     }
 
-    const escapedCwd = cwd.replace(/'/g, "'\\''");
-    const fullCmd = `cd '${escapedCwd}' && ${bin} ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`.trim();
-
-    const os = platform();
-    if (os === "darwin") {
-      const script = [
-        'tell application "Terminal"',
-        `  do script "${fullCmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
-        "  activate",
-        "end tell",
-      ].join("\n");
-      spawn("osascript", ["-e", script], { detached: true, stdio: "ignore" }).unref();
-    } else if (os === "win32") {
-      spawn("cmd", ["/c", "start", "cmd", "/k", fullCmd], { detached: true, stdio: "ignore", shell: true }).unref();
-    } else {
-      const terminals = ["x-terminal-emulator", "gnome-terminal", "xterm"];
-      let launched = false;
-      for (const term of terminals) {
-        try {
-          if (term === "gnome-terminal") {
-            spawn(term, ["--", "bash", "-c", fullCmd], { detached: true, stdio: "ignore" }).unref();
-          } else {
-            spawn(term, ["-e", `bash -c '${fullCmd.replace(/'/g, "'\\''")}'`], { detached: true, stdio: "ignore" }).unref();
-          }
-          launched = true;
-          break;
-        } catch { /* try next */ }
-      }
-      if (!launched) {
-        dashboard.log(agentId, chalk.red("Could not find a terminal emulator to open"));
-        return;
-      }
+    if (!openInTerminal(bin, args, cwd)) {
+      dashboard.log(agentId, chalk.red("Could not open a terminal window"));
+      return;
     }
-
     dashboard.log(agentId, chalk.cyan(`Opened conversation in CLI: ${conv.title || conversation_id.substring(0, 8)}`));
   }
 
@@ -2280,7 +2325,14 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
           const { convId, requestId } = parsed;
 
           const conv = localDb.getConversation(convId);
-          if (!conv || conv.agent_id !== agentId) continue;
+          if (!conv) {
+            dashboard.log(agentId, chalk.dim(`[perm-watcher] unknown conv ${convId.substring(0, 8)} — not in localDb`));
+            continue;
+          }
+          if (conv.agent_id !== agentId) {
+            dashboard.log(agentId, chalk.dim(`[perm-watcher] conv ${convId.substring(0, 8)} belongs to different agent, skipping`));
+            continue;
+          }
 
           const reqPath = join(PERM_DIR, file);
           const req = JSON.parse(readFileSync(reqPath, "utf8"));
@@ -2381,7 +2433,7 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
       broadcastChannel = null;
     }
     try {
-      await callEdgeFunction("bridge_heartbeat", { agent_id: agentId, status: "offline" });
+      await restPatch("bridge_agents", agentId, { status: "offline", last_seen_at: new Date().toISOString() });
     } catch {}
     dashboard.setAgentStatus(agentId, "offline");
   }
@@ -2391,36 +2443,7 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
       realtime: { heartbeatIntervalMs: 2500 },
     });
 
-    let { data, error } = await supabase.auth.signInWithPassword({
-      email: agentConfig.credentials.email,
-      password: agentConfig.credentials.password,
-    });
-
-    if (error) {
-      let retryOk = false;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        const delay = 2000;
-        dashboard.log(agentId, chalk.yellow(`Login failed, retrying in ${delay / 1000}s (attempt ${attempt}/3)...`));
-        await sleep(delay);
-        const retry = await supabase.auth.signInWithPassword({
-          email: agentConfig.credentials.email,
-          password: agentConfig.credentials.password,
-        });
-        if (!retry.error) {
-          retryOk = true;
-          data = retry.data;
-          break;
-        }
-      }
-      if (!retryOk) {
-        dashboard.log(agentId, chalk.red(`Login failed after retries: ${error.message}`));
-        dashboard.setAgentStatus(agentId, "error");
-        return false;
-      }
-    }
-
-    accessToken = data.session.access_token;
-    dashboard.log(agentId, chalk.green("Authenticated"));
+    dashboard.log(agentId, chalk.green("Connected"));
     dashboard.setAgentStatus(agentId, "online");
 
     const existingConvs = localDb.getConversations(agentId);
@@ -2450,19 +2473,15 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
       driver.configure({
         supabaseUrl: SUPABASE_URL,
         supabaseAnonKey: SUPABASE_ANON_KEY,
-        credentials: agentConfig.credentials,
         artifactsEnabled: agentConfig.artifacts_enabled ?? false,
-        getAccessToken: async () => {
-          const { data: sessionData } = await supabase.auth.getSession();
-          return sessionData?.session?.access_token ?? accessToken;
-        },
+        getAccessToken: async () => SUPABASE_ANON_KEY,
       });
     }
     // Start broadcast listener and heartbeat in parallel — the lens can detect
     // us via broadcast presence before the DB heartbeat round-trip completes.
     const [broadcastReady] = await Promise.all([
       startBroadcastListener(),
-      callEdgeFunction("bridge_heartbeat", { agent_id: agentId, status: "online" })
+      restPatch("bridge_agents", agentId, { status: "online", last_seen_at: new Date().toISOString() })
         .then(() => dashboard.setHeartbeat(agentId, true))
         .catch((err) => {
           dashboard.log(agentId, chalk.yellow(`Initial heartbeat failed: ${err.message}`));
@@ -2493,7 +2512,22 @@ function createBridgeInstance(agentConfig, driver, dashboard) {
     return true;
   }
 
-  return { start, shutdown, agentId, openConversation: openConversationInCLI };
+  async function broadcastConversationCreated(conversationId, title, createdAt, workspace) {
+    const sent = await broadcast("conversation_created", {
+      conversation_id: conversationId,
+      agent_id: agentId,
+      title,
+      created_at: createdAt,
+      workspace: workspace ?? null,
+    });
+    if (sent) {
+      dashboard.log(agentId, chalk.dim(`[scan] broadcast conversation_created for ${conversationId.substring(0, 8)}`));
+    } else {
+      dashboard.log(agentId, chalk.yellow(`[scan] conversation_created broadcast failed for ${conversationId.substring(0, 8)}`));
+    }
+  }
+
+  return { start, shutdown, agentId, openConversation: openConversationInCLI, broadcastConversationCreated };
 }
 
 // ── Run Selected Agents ─────────────────────────────────────────────────────
@@ -2568,6 +2602,41 @@ async function runAgents(agentConfigs) {
     dashboard.onOpenConversation = (selectedAgentId, convId) => {
       const inst = instances.find((i) => i.agentId === selectedAgentId);
       inst?.openConversation(convId);
+    };
+    let scanSessionsActive = false;
+    dashboard.onScanSessions = async (selectedAgentId) => {
+      if (scanSessionsActive) return;
+      scanSessionsActive = true;
+
+      const agentConfig = instances.find((i) => i.agentId === selectedAgentId)
+        ? loadSavedAgents().find((a) => a.agent_id === selectedAgentId)
+        : loadSavedAgents()[0];
+
+      if (!agentConfig || agentConfig.agent_type !== "claude") {
+        scanSessionsActive = false;
+        return;
+      }
+
+      dashboard.teardown();
+      process.stdout.write("\x1B[2J\x1B[3J\x1B[H");
+      const result = await scanAndAttachClaudeSession(agentConfig);
+      if (result?.message) console.log(result.message);
+
+      if (result?.ok) {
+        // Update dashboard in-memory state so the conversation appears immediately.
+        dashboard.setConversationTitle(result.agentId, result.sessionId, result.projectName, Date.now());
+        dashboard.log(result.agentId, chalk.cyan(`Attached session: ${result.projectName} (${result.sessionId.substring(0, 8)}…)`));
+
+        // Broadcast conversation_created so the webapp is notified.
+        const inst = instances.find((i) => i.agentId === result.agentId);
+        if (inst?.broadcastConversationCreated) {
+          inst.broadcastConversationCreated(result.sessionId, result.projectName, result.createdAt, null);
+        }
+      }
+
+      await new Promise((r) => setTimeout(r, 1200));
+      scanSessionsActive = false;
+      dashboard.setup();
     };
   });
 }
